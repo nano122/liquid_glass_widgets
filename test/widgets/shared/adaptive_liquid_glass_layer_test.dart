@@ -139,6 +139,24 @@ void main() {
     );
     expect(probeWrapper(tester).key, isA<GlobalKey>());
   });
+
+  testWidgets('standard path does not build an empty premium render layer',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: AdaptiveLiquidGlassLayer(
+          quality: GlassQuality.standard,
+          child: _MorphProbe(),
+        ),
+      ),
+    );
+
+    // 回归保护：Standard 的玻璃由各个 LightweightLiquidGlass 自己绘制，
+    // 父级 LiquidGlassLayer 收不到任何 Premium 几何体。继续保留该父层只会
+    // 多建 BackdropGroup、RepaintBoundary 和 ShaderBuilder，视觉上没有输出。
+    expect(find.byType(LiquidGlassLayer), findsNothing);
+    expect(probeWrapper(tester).key, isA<GlobalKey>());
+  });
 }
 
 /// A findable marker widget used to locate the layer's keyed child wrapper.

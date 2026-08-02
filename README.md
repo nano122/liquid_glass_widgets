@@ -295,6 +295,9 @@ Platform detection is automatic — no configuration required.
 ### Standard — Default, Recommended
 
 The right choice for 95% of use cases. Works on every platform with iOS 26-accurate glass effects.
+Its backdrop uses one composed Gaussian-blur + saturation read, while the
+lightweight material shader adds the directional rim, volume shading, and tint.
+The backdrop layer and exact filters are retained and shared across repaints.
 
 ```dart
 GlassContainer(
@@ -318,7 +321,11 @@ GlassCard(
 
 ### Minimal — Shader-Free
 
-Zero custom fragment shader cost on any device. Uses `BackdropFilter` blur + a Rec. 709 saturation matrix + a specular rim stroke. Visually equivalent to a high-quality frosted panel.
+Zero custom fragment shader cost on any device. Uses one `BackdropFilter` blur,
+a post-blur saturation color filter, and a specular rim stroke. The saturation
+step no longer re-reads the backdrop, so a stationary Minimal surface performs
+one backdrop capture even when saturation is enabled. Visually equivalent to a
+high-quality frosted panel.
 
 ```dart
 GlassCard(
@@ -504,6 +511,7 @@ Each value maps to a fixed power-of-2 exponent. The GPU uses a zero-transcendent
 4. **Premium quality for fixed surfaces** — app bars, bottom bars, and hero sections
 5. **Minimal quality for shader-dense screens** — use `GlassQuality.minimal` for background panels and list cards to fire zero custom shader invocations during scroll, then keep `standard` or `premium` only on the focal element
 6. **Accessibility fallbacks are zero-cost** — when Reduce Transparency is active, the glass shader is bypassed entirely; `BackdropFilter` blur runs in Flutter's own paint layer with no custom shader overhead
+7. **Keep `AdaptiveLiquidGlassLayer` around groups, not every surface** — Standard and Minimal automatically use a transparent parent layer; only Premium constructs the geometry/shader group
 
 ### Automatic Quality Adaptation *(experimental)*
 

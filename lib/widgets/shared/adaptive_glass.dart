@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
 
 import '../../types/glass_quality.dart';
+import '../../src/renderer/glass_backdrop_kernel.dart';
 import '../../utils/glass_performance_monitor.dart';
 import 'glass_accessibility_scope.dart';
 import 'glass_isolation_scope.dart';
@@ -647,25 +648,6 @@ class _FrostedFallback extends StatelessWidget {
   /// negligible next to having no blur).
   final bool platformViewBackdrop;
 
-  /// Rec. 709 saturation matrix — identical to upstream FakeGlass.
-  ///
-  /// saturation = 0  → grayscale
-  /// saturation = 1  → unchanged
-  /// saturation > 1  → over-saturated (default glass is 1.5)
-  static List<double> _saturationMatrix(double saturation) {
-    const lumR = 0.299;
-    const lumG = 0.587;
-    const lumB = 0.114;
-    final s = saturation;
-    final inv = 1.0 - s;
-    return [
-      lumR * inv + s, lumG * inv, lumB * inv, 0, 0, // R
-      lumR * inv, lumG * inv + s, lumB * inv, 0, 0, // G
-      lumR * inv, lumG * inv, lumB * inv + s, 0, 0, // B
-      0, 0, 0, 1, 0, // A
-    ];
-  }
-
   @override
   Widget build(BuildContext context) {
     final blur = settings.effectiveBlur.clamp(0.0, 40.0);
@@ -726,18 +708,23 @@ class _FrostedFallback extends StatelessWidget {
 
     Widget body;
     if (useBlur) {
-      body = BackdropFilter(
-        filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+      final blurredBody = BackdropFilter(
+        filter: GlassBackdropKernel.exact(sigma: blur),
         child: DecoratedBox(
           decoration: BoxDecoration(color: frostedColor),
-          child: needsSaturation
-              ? BackdropFilter(
-                  filter: ui.ColorFilter.matrix(_saturationMatrix(sat)),
-                  child: const SizedBox.expand(),
-                )
-              : const SizedBox.expand(),
+          child: const SizedBox.expand(),
         ),
       );
+      // 原实现用第二个 BackdropFilter 对“模糊背景 + tint”整体做饱和度，
+      // 因而同一玻璃区域会读取两次 backdrop。ColorFiltered 对子树最终像素
+      // 使用同一线性颜色矩阵，顺序仍然是 blur → tint → saturation，视觉公式
+      // 不变，却不再触发第二次昂贵的背景采样。
+      body = needsSaturation
+          ? ColorFiltered(
+              colorFilter: GlassBackdropKernel.saturationFilter(sat),
+              child: blurredBody,
+            )
+          : blurredBody;
     } else {
       // Minimal interactive path: blur-free frosted tint prevents cache flicker
       // when updating rapidly during spring physics drag.

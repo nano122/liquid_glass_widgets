@@ -128,7 +128,13 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
     // wrapper, no blend group — just InheritedLiquidGlass so descendants can
     // read settings and quality):
     //
-    // 1. GlassQuality.minimal:
+    // 1. GlassQuality.standard / minimal:
+    //    Standard 与 Minimal 的效果都由子级自己绘制，不会向 Premium
+    //    GeometryRenderLink 注册任何形状。父级 LiquidGlassLayer 因而没有
+    //    可见输出，只会额外创建 BackdropGroup、RepaintBoundary 与 shader
+    //    构建器；直接透传可完整保留视觉，并缩短每帧合成链。
+    //
+    //    Minimal 还需要避免父层覆盖完整布局边界：
     //    Skips LiquidGlassLayer entirely. The layer has no shape — it wraps
     //    the full bounds including any padding around pill/circle children.
     //    Painting a BackdropFilter + tinted Container here bleeds into that
@@ -144,7 +150,7 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
     //    _FrostedFallback (live BackdropFilter) when platformViewBackdrop is
     //    set, which correctly samples through the PlatformView compositor.
     // -------------------------------------------------------------------------
-    if (effectiveQuality == GlassQuality.minimal ||
+    if (effectiveQuality != GlassQuality.premium ||
         widget.platformViewBackdrop) {
       return GlassIsolationScope(
         isolated: false,

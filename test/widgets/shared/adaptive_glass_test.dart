@@ -175,7 +175,7 @@ void main() {
   });
 
   group('AdaptiveGlass _FrostedFallback saturation paths', () {
-    testWidgets('saturation != 1 applies ColorFilter matrix (line 349-353)',
+    testWidgets('saturation != 1 reads backdrop once then applies ColorFilter',
         (tester) async {
       await tester.pumpWidget(
         createTestApp(
@@ -189,7 +189,11 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(AdaptiveGlass), findsOneWidget);
+      // 回归保护：旧实现用第二个 BackdropFilter 做饱和度，导致同一块玻璃
+      // 连续读取两次背景。颜色矩阵只需要处理第一次模糊的输出，无需再次
+      // 采样 backdrop，因此这里必须始终只有一个背景滤镜层。
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(find.byType(ColorFiltered), findsOneWidget);
     });
 
     testWidgets('saturation == 1.0 skips ColorFilter (else path, line 354)',
@@ -206,7 +210,8 @@ void main() {
         ),
       );
       await tester.pumpAndSettle();
-      expect(find.byType(AdaptiveGlass), findsOneWidget);
+      expect(find.byType(BackdropFilter), findsOneWidget);
+      expect(find.byType(ColorFiltered), findsNothing);
     });
   });
 

@@ -8,6 +8,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/glass_backdrop_kernel.dart';
 import '../../theme/glass_theme.dart';
 
 import 'inherited_liquid_glass.dart';
@@ -632,11 +633,6 @@ class _RenderLightweightGlass extends RenderProxyBox {
   LiquidGlassSettings get settings => _settings;
   set settings(LiquidGlassSettings value) {
     if (_settings == value) return;
-    // Invalidate cached filter when blur or saturation changes.
-    if (value.effectiveBlur != _settings.effectiveBlur ||
-        value.effectiveSaturation != _settings.effectiveSaturation) {
-      _cachedBlurFilter = null;
-    }
     // Recompute trig only when lightAngle actually changes.
     if (value.lightAngle != _settings.lightAngle) {
       _cachedLightCos = math.cos(value.lightAngle);
@@ -726,56 +722,11 @@ class _RenderLightweightGlass extends RenderProxyBox {
   double _cachedLightCos;
   double _cachedLightSin;
 
-  // ── Cached backdrop filter (Task 1.2) ─────────────────────────────────────
-  // The composed blur+saturation ImageFilter is rebuilt only when blur sigma
-  // or saturation changes — not on every frame. Eliminates a 20-element
-  // List<double> allocation + 2 object allocations per frame per glass widget.
-  ui.ImageFilter? _cachedBlurFilter;
-  double _cachedFilterBlur = -1;
-  double _cachedFilterSat = -1;
-
-  /// Returns the cached blur+saturation filter, rebuilding only when the
-  /// blur sigma or saturation has changed since the last call.
-  ui.ImageFilter _getBlurFilter(double blurSigma, double sat) {
-    if (_cachedBlurFilter != null &&
-        _cachedFilterBlur == blurSigma &&
-        _cachedFilterSat == sat) {
-      return _cachedBlurFilter!;
-    }
-
-    // Standard saturation ColorFilter matrix (ITU-R BT.601 luminance weights).
-    const double rw = 0.2126, gw = 0.7152, bw = 0.0722;
-    final ui.ColorFilter satFilter = ui.ColorFilter.matrix(<double>[
-      rw + (1 - rw) * sat,
-      gw - gw * sat,
-      bw - bw * sat,
-      0,
-      0,
-      rw - rw * sat,
-      gw + (1 - gw) * sat,
-      bw - bw * sat,
-      0,
-      0,
-      rw - rw * sat,
-      gw - gw * sat,
-      bw + (1 - bw) * sat,
-      0,
-      0,
-      0,
-      0,
-      0,
-      1,
-      0,
-    ]);
-
-    _cachedBlurFilter = ui.ImageFilter.compose(
-      outer: satFilter,
-      inner: ui.ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
-    );
-    _cachedFilterBlur = blurSigma;
-    _cachedFilterSat = sat;
-    return _cachedBlurFilter!;
-  }
+  // Standard 的 BackdropFilterLayer 由 RenderObject 持有并跨帧复用。
+  // Flutter 会把旧 engineLayer 交还给 Impeller，避免每次 repaint 都重建
+  // GPU backdrop 节点；当本帧不需要模糊时则主动释放引用。
+  @override
+  BackdropFilterLayer? get layer => super.layer as BackdropFilterLayer?;
 
   // Only force compositing when we actually push a BackdropFilterLayer
   // (shader available AND blur > 0 AND not skipped by ancestor blur).
@@ -807,21 +758,28 @@ class _RenderLightweightGlass extends RenderProxyBox {
       // Result: the blurred background seen through Standard glass is saturated
       // identically to Premium — no background texture capture required.
       //
-      // The filter is cached on the render object and only rebuilt when blur
-      // sigma or saturation changes — see _getBlurFilter().
-      final filter = _getBlurFilter(
-        blurSigma,
-        _settings.effectiveSaturation,
+      // 滤镜由 GlassBackdropKernel 按 sigma 与饱和度跨组件复用；设置改变时
+      // 直接索引对应实例，不再由每个 RenderObject 各自分配矩阵与滤镜。
+      final filter = GlassBackdropKernel.exact(
+        sigma: blurSigma,
+        saturation: _settings.effectiveSaturation,
       );
 
+      layer ??= BackdropFilterLayer();
+      layer!.filter = filter;
       context.pushLayer(
-        BackdropFilterLayer(filter: filter),
+        layer!,
         (context, offset) {
           _paintGlassContent(context, offset);
         },
         offset,
+        // 明确告诉子 PaintingContext 玻璃的真实输出范围，避免默认继承父级
+        // （概要页通常是整屏）估算边界。该参数不裁剪高斯采样，视觉不变；
+        // 外层现有的形状 Clip 仍负责最终像素边界。
+        childPaintBounds: offset & size,
       );
     } else {
+      layer = null;
       _paintGlassContent(context, offset);
     }
   }
