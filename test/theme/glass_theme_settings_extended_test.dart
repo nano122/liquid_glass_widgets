@@ -93,10 +93,25 @@ void main() {
       ).applyTo(base);
       expect(merged.specularSharpness, GlassSpecularSharpness.sharp);
     });
+
+    test('fresnelStrength override', () {
+      final merged =
+          const GlassThemeSettings(fresnelStrength: 0.45).applyTo(base);
+      expect(merged.fresnelStrength, 0.45);
+      expect(merged.blur, base.blur);
+    });
+
+    test('edgeAbsorption override', () {
+      final merged = const GlassThemeSettings(
+        edgeAbsorption: 0.25,
+      ).applyTo(base);
+      expect(merged.edgeAbsorption, 0.25);
+      expect(merged.blur, base.blur);
+    });
   });
 
   group('GlassThemeSettings.applyTo — all fields override simultaneously', () {
-    test('all 11 fields replaced', () {
+    test('all fields replaced', () {
       const base = LiquidGlassSettings();
       const override = GlassThemeSettings(
         visibility: 0.3,
@@ -107,9 +122,11 @@ void main() {
         lightAngle: 3.0,
         lightIntensity: 1.5,
         ambientStrength: 0.9,
+        fresnelStrength: 0.85,
         refractiveIndex: 1.6,
         saturation: 1.8,
         specularSharpness: GlassSpecularSharpness.medium,
+        edgeAbsorption: 0.3,
       );
       final merged = override.applyTo(base);
 
@@ -121,9 +138,11 @@ void main() {
       expect(merged.lightAngle, 3.0);
       expect(merged.lightIntensity, 1.5);
       expect(merged.ambientStrength, 0.9);
+      expect(merged.fresnelStrength, 0.85);
       expect(merged.refractiveIndex, 1.6);
       expect(merged.saturation, 1.8);
       expect(merged.specularSharpness, GlassSpecularSharpness.medium);
+      expect(merged.edgeAbsorption, 0.3);
     });
   });
 
@@ -194,6 +213,11 @@ void main() {
       expect(copy.ambientStrength, 0.5);
     });
 
+    test('copyWith fresnelStrength', () {
+      final copy = original.copyWith(fresnelStrength: 0.45);
+      expect(copy.fresnelStrength, 0.45);
+    });
+
     test('copyWith refractiveIndex', () {
       final copy = original.copyWith(refractiveIndex: 1.7);
       expect(copy.refractiveIndex, 1.7);
@@ -209,6 +233,11 @@ void main() {
         specularSharpness: GlassSpecularSharpness.sharp,
       );
       expect(copy.specularSharpness, GlassSpecularSharpness.sharp);
+    });
+
+    test('copyWith edgeAbsorption', () {
+      final copy = original.copyWith(edgeAbsorption: 0.35);
+      expect(copy.edgeAbsorption, 0.35);
     });
 
     test('copyWith multiple fields', () {

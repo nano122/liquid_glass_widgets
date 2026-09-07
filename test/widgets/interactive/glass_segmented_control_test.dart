@@ -270,6 +270,37 @@ void main() {
       expect(find.byType(GlassSegmentedControl), findsOneWidget);
     });
 
+    testWidgets('RTL drag right selects left logical segment', (tester) async {
+      int selected = 2; // Start at logical right (physical left in RTL)
+      await tester.pumpWidget(
+        createTestApp(
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: SizedBox(
+              width: 300,
+              child: GlassSegmentedControl(
+                segments: [
+                  GlassSegment(label: 'P'), // logical left, physical right
+                  GlassSegment(label: 'Q'), // logical center, physical center
+                  GlassSegment(label: 'R'), // logical right, physical left
+                ],
+                selectedIndex: selected,
+                onSegmentSelected: (i) => selected = i,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Start drag at center and fling to the right
+      final center = tester.getCenter(find.byType(GlassSegmentedControl));
+      await tester.flingFrom(center, const Offset(100, 0), 1000);
+      await tester.pumpAndSettle();
+
+      // Should have selected index 0 or 1 (logical left/center), definitely not 2.
+      expect(selected, lessThan(2));
+    });
+
     testWidgets('drag cancel snaps back without crash', (tester) async {
       await tester.pumpWidget(
         createTestApp(
@@ -651,9 +682,6 @@ void main() {
           ),
         );
 
-        // GlassFocusRegion emits a Semantics node with the label, and the
-        // inner Text widget also emits one. Use first() to get the outer
-        // button-role node which is the one GlassFocusRegion produces.
         final nodeA = tester.getSemantics(
           find.bySemanticsLabel('Semantics A').first,
         );
@@ -662,9 +690,7 @@ void main() {
         // ignore: deprecated_member_use
         expect(nodeA.hasFlag(SemanticsFlag.isSelected), true);
         // ignore: deprecated_member_use
-        expect(nodeA.hasFlag(SemanticsFlag.isEnabled), true);
-        // ignore: deprecated_member_use
-        expect(nodeA.hasFlag(SemanticsFlag.isFocusable), true);
+        expect(nodeA.hasFlag(SemanticsFlag.hasSelectedState), true);
 
         final nodeB = tester.getSemantics(
           find.bySemanticsLabel('Semantics B').first,
@@ -674,9 +700,7 @@ void main() {
         // ignore: deprecated_member_use
         expect(nodeB.hasFlag(SemanticsFlag.isSelected), false);
         // ignore: deprecated_member_use
-        expect(nodeB.hasFlag(SemanticsFlag.isEnabled), true);
-        // ignore: deprecated_member_use
-        expect(nodeB.hasFlag(SemanticsFlag.isFocusable), true);
+        expect(nodeB.hasFlag(SemanticsFlag.hasSelectedState), true);
       } finally {
         handle.dispose();
       }

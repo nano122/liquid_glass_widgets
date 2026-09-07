@@ -107,6 +107,7 @@ class GlassChip extends StatelessWidget {
     this.settings,
     this.useOwnLayer = false,
     this.quality,
+    this.platformViewBackdrop = false,
     // GlassButton properties
     this.interactionScale = 1.03,
     this.stretch = 0.3,
@@ -221,6 +222,16 @@ class GlassChip extends StatelessWidget {
   ///
   /// Use [GlassQuality.premium] for shader-based glass in static layouts only.
   final GlassQuality? quality;
+
+  /// Render the backdrop through a live [BackdropFilter] instead of the
+  /// shader's captured backdrop.
+  ///
+  /// Set this when the chip floats over a platform view (a map, a camera
+  /// preview, a video). The premium and standard shaders read their backdrop
+  /// from a capture, which cannot see a platform view, so over one they
+  /// render inert. [GlassButton] already exposes this; without it here a chip
+  /// has no correct rendering path above a platform view.
+  final bool platformViewBackdrop;
 
   // ===========================================================================
   // Interaction Properties (from GlassButton)
@@ -352,6 +363,7 @@ class GlassChip extends StatelessWidget {
           settings: settings,
           useOwnLayer: useOwnLayer,
           quality: quality ?? GlassQuality.standard,
+          platformViewBackdrop: platformViewBackdrop,
           interactionScale: effectiveInteractionScale,
           stretch: effectiveStretch,
           glowRadius: glowRadius,

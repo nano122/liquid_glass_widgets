@@ -1,9 +1,8 @@
-// ignore_for_file: public_member_api_docs
 // Internal spring animation utilities — drop-in replacement for the motor
 // package, implemented entirely on top of Flutter's built-in physics.
 //
 // Only the subset of motor that is actually used in this package is
-// implemented here.  Public API is intentionally not exported.
+// implemented here.
 
 import 'package:flutter/physics.dart';
 import 'package:flutter/scheduler.dart';
@@ -86,6 +85,14 @@ abstract final class GlassSpring {
 ///   `BoundedSingleMotionController`).
 /// * Implements [Listenable] so it works directly with [ListenableBuilder].
 class SingleSpringController extends ChangeNotifier {
+  /// Creates a [SingleSpringController].
+  ///
+  /// - [vsync]: the [TickerProvider] that drives the animation (typically
+  ///   your [State] with [SingleTickerProviderStateMixin]).
+  /// - [spring]: the spring description. Can be changed at any time.
+  /// - [initialValue]: the starting value before any [animateTo] is called.
+  /// - [lowerBound] / [upperBound]: optional clamping; mirrors
+  ///   `BoundedSingleMotionController`.
   SingleSpringController({
     required TickerProvider vsync,
     required SpringDescription spring,
@@ -115,6 +122,7 @@ class SingleSpringController extends ChangeNotifier {
   /// The current animated value.
   double get value => _value;
 
+  /// Current spring velocity in units per second.
   double get velocity {
     final sim = _sim;
     if (sim == null) return 0.0;
@@ -219,6 +227,10 @@ class SingleSpringController extends ChangeNotifier {
 ///
 /// Implements [Listenable]; listeners fire whenever either axis ticks.
 class OffsetSpringController extends ChangeNotifier {
+  /// Creates an [OffsetSpringController].
+  ///
+  /// Each axis is driven by an independent [SingleSpringController] so the
+  /// x and y components settle at independent rates when redirected.
   OffsetSpringController({
     required TickerProvider vsync,
     required SpringDescription spring,
@@ -277,6 +289,10 @@ class OffsetSpringController extends ChangeNotifier {
 // SpringBuilder  (replaces SingleMotionBuilder / MotionBuilder without velocity)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Signature for the builder callback used by [SpringBuilder].
+///
+/// Called on every animation frame. [value] is the current spring value;
+/// [child] is the optional pre-built subtree passed to [SpringBuilder.child].
 typedef SpringWidgetBuilder = Widget Function(
   BuildContext context,
   double value,
@@ -292,6 +308,7 @@ typedef SpringWidgetBuilder = Widget Function(
 /// preserving the current velocity (identical to motor's behaviour).
 /// When [spring] changes, the running simulation is redirected too.
 class SpringBuilder extends StatefulWidget {
+  /// Creates a [SpringBuilder].
   const SpringBuilder({
     required this.value,
     required this.spring,
@@ -300,9 +317,16 @@ class SpringBuilder extends StatefulWidget {
     super.key,
   });
 
+  /// Target value the spring animates toward.
   final double value;
+
+  /// Spring description controlling the animation's stiffness and damping.
   final SpringDescription spring;
+
+  /// Builder called on every frame with the current animated value.
   final SpringWidgetBuilder builder;
+
+  /// Optional pre-built subtree passed through to [builder].
   final Widget? child;
 
   @override
@@ -364,6 +388,10 @@ class _SpringBuilderState extends State<SpringBuilder>
 //                         SingleVelocityMotionBuilder)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Signature for the builder callback used by [VelocitySpringBuilder].
+///
+/// Called on every animation frame. `velocity` is in units per second;
+/// useful for secondary motion effects that react to the spring's momentum.
 typedef VelocitySpringWidgetBuilder = Widget Function(
   BuildContext context,
   double value,
@@ -371,7 +399,7 @@ typedef VelocitySpringWidgetBuilder = Widget Function(
   Widget? child,
 );
 
-/// Like [SpringBuilder] but also provides the current spring [velocity] to
+/// Like [SpringBuilder] but also provides the current spring `velocity` to
 /// the builder.  Equivalent to motor's `VelocityMotionBuilder` /
 /// `SingleVelocityMotionBuilder`.
 ///
@@ -379,12 +407,14 @@ typedef VelocitySpringWidgetBuilder = Widget Function(
 /// [springWhenReleased] is used after the user lifts their finger.
 /// Switching between them mid-animation redirects the simulation smoothly.
 class VelocitySpringBuilder extends StatefulWidget {
+  /// Creates a [VelocitySpringBuilder].
   const VelocitySpringBuilder({
     required this.value,
     required this.springWhenActive,
     required this.springWhenReleased,
     required this.builder,
     this.active = true,
+    this.teleportEpoch = 0,
     this.child,
     super.key,
   });
@@ -401,7 +431,20 @@ class VelocitySpringBuilder extends StatefulWidget {
   /// Whether the user is currently dragging (selects [springWhenActive]).
   final bool active;
 
+  /// Monotonic marker for DISCONTINUOUS [value] changes.
+  ///
+  /// When this differs from the previous build's value, the follower snaps
+  /// straight to [value] instead of animating toward it — for corrections
+  /// that must not read as motion (an indicator snapped to freshly measured
+  /// geometry at mount, or after its list was re-measured). Continuous
+  /// changes (taps, drags, spring targets) leave the epoch alone and
+  /// animate exactly as before.
+  final int teleportEpoch;
+
+  /// The builder called on every frame with the current value and velocity.
   final VelocitySpringWidgetBuilder builder;
+
+  /// Optional pre-built subtree passed through to [builder].
   final Widget? child;
 
   @override
@@ -438,10 +481,13 @@ class _VelocitySpringBuilderState extends State<VelocitySpringBuilder>
     if (springChanged) {
       _ctrl.spring = _currentSpring;
     }
-    if (widget.value != oldWidget.value) {
+    if (widget.value != oldWidget.value ||
+        widget.teleportEpoch != oldWidget.teleportEpoch) {
       // IP1: When Reduce Motion is active, snap instantly instead of animating.
+      // A teleport-epoch change snaps too: the value jumped discontinuously
+      // and travel would render as motion the source never made.
       final reduceMotion = GlassAccessibilityData.of(context).reduceMotion;
-      if (reduceMotion) {
+      if (reduceMotion || widget.teleportEpoch != oldWidget.teleportEpoch) {
         _ctrl.setValue(widget.value);
       } else {
         _ctrl.animateTo(widget.value);
@@ -470,6 +516,9 @@ class _VelocitySpringBuilderState extends State<VelocitySpringBuilder>
 // OffsetSpringBuilder  (replaces MotionBuilder<Offset> with OffsetMotionConverter)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Signature for the builder callback used by [OffsetSpringBuilder].
+///
+/// Called on every animation frame with the current animated [Offset].
 typedef OffsetSpringWidgetBuilder = Widget Function(
   BuildContext context,
   Offset value,
@@ -479,6 +528,7 @@ typedef OffsetSpringWidgetBuilder = Widget Function(
 /// Like [SpringBuilder] but for [Offset] values.
 /// Equivalent to motor's `MotionBuilder<Offset>` with `OffsetMotionConverter`.
 class OffsetSpringBuilder extends StatefulWidget {
+  /// Creates an [OffsetSpringBuilder].
   const OffsetSpringBuilder({
     required this.value,
     required this.spring,
@@ -487,9 +537,16 @@ class OffsetSpringBuilder extends StatefulWidget {
     super.key,
   });
 
+  /// Target offset the spring animates toward.
   final Offset value;
+
+  /// Spring description controlling the animation's stiffness and damping.
   final SpringDescription spring;
+
+  /// Builder called on every frame with the current animated offset.
   final OffsetSpringWidgetBuilder builder;
+
+  /// Optional pre-built subtree passed through to [builder].
   final Widget? child;
 
   @override

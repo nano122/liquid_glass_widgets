@@ -350,6 +350,7 @@ class _GlassProgressIndicatorState extends State<GlassProgressIndicator>
               color: color,
               backgroundColor: backgroundColor,
               animation: _controller.value,
+              textDirection: Directionality.of(context),
             ),
           );
         },
@@ -452,12 +453,14 @@ class _LinearProgressPainter extends CustomPainter {
     required this.color,
     required this.backgroundColor,
     required this.animation,
+    required this.textDirection,
   });
 
   final double? value;
   final Color color;
   final Color backgroundColor;
   final double animation;
+  final TextDirection textDirection;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -486,12 +489,16 @@ class _LinearProgressPainter extends CustomPainter {
       // Bar width is 30% of track width
       final barWidth = width * 0.3;
       final position = animation * (width + barWidth) - barWidth;
-      progressX = position;
+
       progressWidth = barWidth;
+      progressX = textDirection == TextDirection.rtl
+          ? width - position - progressWidth
+          : position;
     } else {
-      // Determinate: fill from left
-      progressX = 0;
+      // Determinate: fill from left (or right in RTL)
       progressWidth = width * value!.clamp(0.0, 1.0);
+      progressX =
+          textDirection == TextDirection.rtl ? width - progressWidth : 0;
     }
 
     if (progressWidth > 0) {
@@ -525,7 +532,8 @@ class _LinearProgressPainter extends CustomPainter {
     return value != oldDelegate.value ||
         color != oldDelegate.color ||
         backgroundColor != oldDelegate.backgroundColor ||
-        animation != oldDelegate.animation;
+        animation != oldDelegate.animation ||
+        textDirection != oldDelegate.textDirection;
   }
 }
 

@@ -1,4 +1,4 @@
-import 'package:alchemist/alchemist.dart';
+import '../../shared/test_helpers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';

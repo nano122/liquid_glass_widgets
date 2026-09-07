@@ -1,19 +1,18 @@
-// ignore_for_file: avoid_setters_without_getters
+// ignore_for_file: avoid_setters_without_getters, public_member_api_docs
 
 import 'dart:ui';
 import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter_shaders/flutter_shaders.dart';
+import '../internal/glass_materialize_scope.dart';
+import '../internal/multi_shader_builder.dart';
 import '../liquid_glass_renderer.dart';
 import '../internal/render_liquid_glass_geometry.dart';
 import '../internal/transform_tracking_repaint_boundary_mixin.dart';
 import '../liquid_glass_render_scope.dart';
-import '../logging.dart';
 import 'liquid_glass_render_object.dart';
 import '../shaders.dart';
-import 'package:meta/meta.dart';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Scale-safe repaint boundary
@@ -190,8 +189,8 @@ class LiquidGlassLayer extends StatefulWidget {
   final ui.Image? captureImage;
 
   /// The global (screen-space) logical-pixel origin of the [RepaintBoundary]
-  /// that produced [captureImage]. Used to compute [uCaptureOffset] inside
-  /// the shader so [FlutterFragCoord()] fragments are correctly mapped into
+  /// that produced [captureImage]. Used to compute `uCaptureOffset` inside
+  /// the shader so `FlutterFragCoord()` fragments are correctly mapped into
   /// the capture image's coordinate space.
   ///
   /// Ignored when [captureImage] is null.
@@ -205,8 +204,6 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
     with SingleTickerProviderStateMixin {
   late final GeometryRenderLink _link = GeometryRenderLink();
 
-  late final logger = Logger(LgrLogNames.layer);
-
   @override
   void dispose() {
     _link.dispose();
@@ -215,12 +212,15 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
 
   @override
   Widget build(BuildContext context) {
+    // [LOCAL PATCH]: a running materialize transition above this layer
+    // dissolves its glass through the settings' visibility channel — the one
+    // fade the backdrop pass honours. Identity (the same instance) at rest.
+    final settings =
+        GlassMaterializeScope.resolveSettings(context, widget.settings);
+
     if (!ImageFilter.isShaderFilterSupported) {
-      logger.warning(
-          'LiquidGlassLayer requires Impeller. No glass effect will be '
-          'rendered on this platform.');
       return LiquidGlassRenderScope(
-        settings: widget.settings,
+        settings: settings,
         child: InheritedGeometryRenderLink(
           link: _link,
           child: widget.child,
@@ -235,7 +235,7 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
         // expand into the margin without hard-clipping at the original bounds.
         expansion: widget.clipExpansion,
         child: LiquidGlassRenderScope(
-          settings: widget.settings,
+          settings: settings,
           child: InheritedGeometryRenderLink(
             link: _link,
             child: ShaderBuilder(
@@ -243,12 +243,13 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
               (context, shader, child) => _RawShapes(
                 renderShader: shader,
                 backdropKey: BackdropGroup.of(context)?.backdropKey,
-                settings: widget.settings,
+                settings: settings,
                 shadows: widget.shadows,
                 link: _link,
                 clipExpansion: widget.clipExpansion,
                 captureImage: widget.captureImage,
                 captureOriginInScreenSpace: widget.captureOriginInScreenSpace,
+                selfScaled: LiquidGlassSelfScaleScope.of(context),
                 child: child!,
               ),
               child: widget.child,
@@ -271,6 +272,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
     this.clipExpansion = EdgeInsets.zero,
     this.captureImage,
     this.captureOriginInScreenSpace = Offset.zero,
+    this.selfScaled = false,
   });
 
   final FragmentShader renderShader;
@@ -281,6 +283,9 @@ class _RawShapes extends SingleChildRenderObjectWidget {
   final EdgeInsets clipExpansion;
   final ui.Image? captureImage;
   final Offset captureOriginInScreenSpace;
+
+  /// See [LiquidGlassSelfScaleScope].
+  final bool selfScaled;
 
   @override
   RenderObject createRenderObject(BuildContext context) {
@@ -294,6 +299,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       clipExpansion: clipExpansion,
       captureImage: captureImage,
       captureOriginInScreenSpace: captureOriginInScreenSpace,
+      selfScaled: selfScaled,
     );
   }
 
@@ -310,11 +316,11 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       ..backdropKey = backdropKey
       ..clipExpansion = clipExpansion
       ..captureImage = captureImage
-      ..captureOriginInScreenSpace = captureOriginInScreenSpace;
+      ..captureOriginInScreenSpace = captureOriginInScreenSpace
+      ..selfScaled = selfScaled;
   }
 }
 
-@internal
 class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     with TransformTrackingRenderObjectMixin {
   RenderLiquidGlassLayer({
@@ -327,7 +333,9 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     super.captureImage,
     super.captureOriginInScreenSpace,
     EdgeInsets clipExpansion = EdgeInsets.zero,
-  }) : _clipExpansion = clipExpansion;
+    bool selfScaled = false,
+  })  : _clipExpansion = clipExpansion,
+        _selfScaled = selfScaled;
 
   // ── Cached blur filter ──────────────────────────────────────────────────
   // The BackdropFilterLayer's blur filter is rebuilt only when blurSigma
@@ -347,6 +355,15 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     markNeedsPaint();
   }
 
+  /// See [LiquidGlassSelfScaleScope]. Repaints on change: the shader's shape
+  /// bounds are derived from [matteTransform], which this switches.
+  bool _selfScaled;
+  set selfScaled(bool value) {
+    if (_selfScaled == value) return;
+    _selfScaled = value;
+    markNeedsPaint();
+  }
+
   List<BoxShadow> shadows;
 
   @override
@@ -356,15 +373,77 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
         _ => Size.zero,
       };
 
+  Matrix4? _unscaledTransform;
+  Offset? _unscaledCaptureOrigin;
+
+  bool _hasScale(Matrix4 m) {
+    // A surface scaling itself leaves its backdrop where it was, so the live
+    // transform is the right one and freezing would strand the shape.
+    if (_selfScaled) return false;
+    // Detects the CupertinoSheet push-back, which scales the page down
+    // uniformly on both X and Y axes simultaneously (< 1.0 on both).
+    //
+    // Requiring BOTH axes to shrink correctly rejects:
+    //   - 1D jelly physics (one axis squashes, the other stretches; always one >= 1.0)
+    //   - Pure translations (both axes remain 1.0)
+    //   - Z-axis perspective flattening (m[10] == 0 but m[0] == m[5] == 1)
+    final scaleX = m[0].abs();
+    final scaleY = m[5].abs();
+    // Use a very tight tolerance (0.9999) to catch the very first frame of the CupertinoSheet
+    // scale animation. A looser tolerance (0.99) allowed early frames of the animation
+    // (e.g., 0.995) to overwrite the snapshot before freezing, causing a slight jump.
+    const threshold = LiquidGlassSelfScaleScope.freezeScaleThreshold;
+    return (scaleX < threshold && scaleX > 0.0) &&
+        (scaleY < threshold && scaleY > 0.0);
+  }
+
+  /// Snapshots the layer's current screen-space transform and capture origin
+  /// whenever no ancestor scale is active. When a scale IS active (e.g.
+  /// CupertinoSheet push-back), the snapshot is frozen at the last unscaled
+  /// values so [matteTransform] and [captureOriginInScreenSpace] can return
+  /// coordinates that match the unscaled [captureImage] texture.
+  ///
+  /// Called from [paintLiquidGlass] on every frame — not from
+  /// [onTransformChanged] — because [GeometryTransformTrackingLayer] skips
+  /// the callback on the very first frame (when [_lastTransform] is null), and
+  /// only fires again when the accumulated transform actually changes between
+  /// scene builds.  A CupertinoSheet that opens before any movement would leave
+  /// [_unscaledTransform] null if we relied on [onTransformChanged] alone,
+  /// causing the frozen-coordinate fallback to silently miss.
+  ///
+  /// Updating a cached field inside [paint] is safe: it calls no
+  /// [markNeedsPaint], no [setState], and no layout-invalidation, so it does
+  /// not violate Flutter's read-only paint contract.
+  void _updateScaleState(
+      Matrix4 currentTransform, Offset currentCaptureOrigin) {
+    if (!_hasScale(currentTransform)) {
+      _unscaledTransform = currentTransform;
+      _unscaledCaptureOrigin = currentCaptureOrigin;
+    }
+  }
+
   @override
-  Matrix4 get matteTransform => getTransformTo(null);
+  Matrix4 get matteTransform {
+    if (_unscaledTransform case final frozen?
+        when _hasScale(getTransformTo(null))) {
+      return frozen;
+    }
+    return getTransformTo(null);
+  }
+
+  @override
+  Offset get captureOriginInScreenSpace {
+    if (_unscaledCaptureOrigin case final frozen?
+        when _hasScale(getTransformTo(null))) {
+      return frozen;
+    }
+    return super.captureOriginInScreenSpace;
+  }
 
   @override
   void onTransformChanged() {
-    // Transform changes (position, jelly scale, scroll) no longer require a
-    // geometry rebuild. The geometry image is in LOCAL space; matteTransform is
-    // applied synchronously at paint time so the screen position is always
-    // exact with zero async lag.  Only layout() still sets needsGeometryUpdate.
+    // Geometry is in LOCAL space; matteTransform is applied at paint time,
+    // so only a repaint — not a layout/geometry rebuild — is required here.
     markNeedsPaint();
   }
 
@@ -499,6 +578,26 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     // canvas, binding the captured image as uBackgroundTexture (slot 0).
     // This eliminates the live compositor read, making the indicator rendering
     // deterministic and immune to Impeller compositor ordering bugs (#99).
+    //
+    // IMPORTANT: skip the capture path when the ancestor transform applies a scale
+    // (e.g. during a CupertinoSheet drag). The capture image's UV coordinates are
+    // computed relative to the layer's original bounds. When scaled, FlutterFragCoord()
+    // shifts relative to the baked UV constants, sending samples out of range →
+    // The captureImage path correctly maps coordinates on Impeller, but suffers from
+    // double-scaling if the ancestor transform applies a scale (like CupertinoSheet drag),
+    // because the captureImage itself is captured unscaled.
+    // To fix this, we snapshot the layer's unscaled transform on every paint
+    // via _updateScaleState. The moment a 3D perspective scale is applied,
+    // the snapshot stops updating. The matteTransform and
+    // captureOriginInScreenSpace getters then return the last known unscaled
+    // coordinates, perfectly neutralising the double-scale artifact.
+    //
+    // NOTE: _updateScaleState is intentionally called from paint rather than
+    // onTransformChanged. GeometryTransformTrackingLayer skips the callback on
+    // the very first frame, so relying on it alone would leave _unscaledTransform
+    // null if a sheet opens before any position change ever occurs.
+    _updateScaleState(getTransformTo(null), super.captureOriginInScreenSpace);
+
     if (captureImage case final capture?) {
       paintLiquidGlassWithCapture(
         context,
@@ -514,7 +613,6 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
       _clipRectLayerHandle.layer = null;
       return;
     }
-
     // BackdropFilter path (default): live compositor read via BackdropFilterLayer.
     final shaderLayer = (_shaderHandle.layer ??= BackdropFilterLayer())
       ..filter = ImageFilter.shader(renderShader);

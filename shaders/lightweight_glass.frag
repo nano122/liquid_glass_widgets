@@ -1,4 +1,13 @@
+// Copyright 2026, Sebastian Degenaar for pixel-innovations.com (liquid_glass_widgets)
+//
+// SPDX-License-Identifier: MIT
+//
+// Original work — Cross-platform lightweight glass shader (Skia, Web, Impeller).
+// Supports standard and premium quality modes with automatic fallback.
+// Fully original implementation.
+
 #include <flutter/runtime_effect.glsl>
+#include "gles_compat.glsl"
 
 precision highp float;
 
@@ -20,6 +29,12 @@ uniform vec4 uData5; // 20..23 (densityFactor, indicatorWeight, specularSharpnes
 // cornerRadius < 0 → asymmetric mode; per-corner radii come from uData6.
 uniform vec4 uData6; // 24..27 (topLeft, topRight, bottomRight, bottomLeft) — asymmetric only
 uniform vec4 uData7; // 28..31 (bgOrigin.x, bgOrigin.y, bgSize.width, bgSize.height)
+// 32: uEdgeAbsorption — Beer-Lambert meniscus rim darkening [0..1]. Applied after
+// all lighting so it dims the total rim output, matching iOS 26's darker perimeter.
+uniform float uEdgeAbsorption;
+// 33: uFresnelStrength — scales the grazing-angle Fresnel rim brightening [0..∞].
+// Default 1.0 = calibrated iOS 26 baseline. 0.0 = no rim highlight.
+uniform float uFresnelStrength;
 
 uniform sampler2D uBackground; // The captured background texture
 // Slot 22 (uData5.z): specular sharpness level — passed as float 0.0/1.0/2.0, cast to int.
@@ -319,8 +334,10 @@ void main() {
   rimAlphaBase = clamp(rimAlphaBase, 0.0, 1.0);
 
   // ---- STAGE 7: EXTRAS (fresnel) ----
+  // uFresnelStrength (slot 33) scales the grazing-angle rim. Default 1.0 = calibrated
+  // iOS 26 baseline. 0.0 removes the rim highlight entirely.
   float adaptiveStrength = mix(1.2, 0.8, uBackdropLuma);
-  float fresnel = (1.0 - normalZ) * borderMask * 0.10 * adaptiveStrength;
+  float fresnel = (1.0 - normalZ) * borderMask * 0.10 * adaptiveStrength * uFresnelStrength;
 
   // ---- STAGE 8: FINAL COMPOSITE ----
   float vertCoord = localLogical.y / max(uSize.y, 1.0);
@@ -331,6 +348,13 @@ void main() {
   //   Premium shows blurred warm background through glass — so frost = 0 in PATH A.
   // PATH B (no texture): need modest opacity so glass body is visible over the blur layer.
   //   20% white lift is enough to be distinct without looking frosty.
+  // Hoist edgeInfluence to outer scope — used for refraction (PATH A) and
+  // meniscus rim darkening (all paths). Must be declared before PATH A/B split.
+  float distFromEdge = abs(dist);
+  const float edgeZone = 10.0;
+  float edgeInfluence = smoothstep(edgeZone, 0.0, distFromEdge);
+  edgeInfluence *= edgeInfluence; // quadratic falloff for natural lens curve
+
   if (uBackgroundSize.x > 1.0) {
     // PATH A: BG Sample ON
     // We have the background. We composite glass over it manually.
@@ -361,35 +385,45 @@ void main() {
       float outA2 = rimAlphaBase + pmA2 * (1.0 - rimAlphaBase);
       vec3 outRgb2 = rimColorBase * rimAlphaBase + pmRgb2 * (1.0 - rimAlphaBase);
       pmRgb2 = outRgb2 + vec3(0.05) * uIndicatorWeight + vec3(fresnel);
+      // Meniscus rim darkening (PATH A fallback — no valid texture)
+      // Hemisphere profile + light-modulated strength.
+      float r_norm2 = clamp(distFromEdge / edgeZone, 0.0, 1.0);
+      float lensTh2 = sqrt(max(0.0, 1.0 - r_norm2 * r_norm2));
+      float litness2 = dot(surfaceNormal, uLightDirection);
+      float dirScale2 = mix(1.4, 0.6, litness2 * 0.5 + 0.5);
+      pmRgb2 *= max(0.0, 1.0 - lensTh2 * uEdgeAbsorption * dirScale2);
       fragColor = vec4(clamp(pmRgb2, 0.0, 1.0) * mask, outA2 * mask);
     } else {
       // Normal PATH A — background texture is valid.
       //
-      // Edge-zone refraction: indicator-style background warping at rounded
-      // corners. Uses the same approach as interactive_indicator.frag —
-      // smoothstep edge zone with quadratic falloff — but scaled for containers.
-      //
-      // Zero transcendentals: smoothstep compiles to a polynomial (3t²−2t³),
-      // and all remaining ops are multiplies. No refract(), no sqrt().
-      //
-      // Flat interior: when distFromEdge > edgeZone, edgeInfluence = 0 and
-      // edgeOffset = vec2(0) — the texture sample is identical to a flat read.
-      // No branch needed; the GPU computes the same UV for all interior pixels.
-      float distFromEdge = abs(dist);
-      float edgeZone = 10.0;
-      float edgeInfluence = smoothstep(edgeZone, 0.0, distFromEdge);
-      edgeInfluence *= edgeInfluence; // quadratic falloff for natural lens curve
-
+      // Edge-zone refraction uses the edgeInfluence already computed above.
       vec2 edgeOffset = surfaceNormal * edgeInfluence * uThickness * 0.5;
       vec2 refractedUV = uv + edgeOffset / uBackgroundSize;
 
-      // On OpenGL ES the background texture uses bottom-left Y origin;
+      // On pre-3.46 OpenGL ES the background texture uses bottom-left Y origin;
       // edgeOffset.y (computed in Flutter's Y-down space) must be negated.
-      #ifdef IMPELLER_TARGET_OPENGLES
+      // Flutter 3.46+ unified the convention — see gles_compat.glsl.
+      #ifdef LGR_GLES_FLIP_SAMPLE_Y
           refractedUV = uv + vec2(edgeOffset.x, -edgeOffset.y) / uBackgroundSize;
       #endif
 
-      vec3 bgRgb = texture(uBackground, refractedUV).rgb;
+      vec3 bgRgb;
+      if (uChromaticAberration < 0.001) {
+        // No chromatic aberration — single bilinear fetch.
+        bgRgb = texture(uBackground, refractedUV).rgb;
+      } else {
+        // [3] EDGE-CONCENTRATED CHROMATIC ABERRATION
+        // RGB channels split along the surface normal, weighted by edgeInfluence
+        // so dispersion is concentrated at the SDF boundary (the curved glass rim)
+        // and zero in the flat interior — matching the prismatic fringe visible on
+        // real glass edges and iOS 26 pills.
+        float abScale = uChromaticAberration * edgeInfluence * 0.006;
+        vec2 abShift = surfaceNormal * abScale;
+        float bgR = texture(uBackground, refractedUV + abShift).r;
+        float bgG = texture(uBackground, refractedUV).g;
+        float bgB = texture(uBackground, refractedUV - abShift).b;
+        bgRgb = vec3(bgR, bgG, bgB);
+      }
       float bgLuminance = dot(bgRgb, LUMA_WEIGHTS);
 
       // Apply saturation to the background to match Premium's depth.
@@ -414,6 +448,15 @@ void main() {
       finalColor += vec3(uGlowIntensity * 0.3 * glowMask);
 
       finalColor = clamp(finalColor + vec3(fresnel), 0.0, 1.0);
+
+      // [1] Hemisphere lens profile + [2] light-modulated absorption (PATH A normal)
+      float r_normA = clamp(distFromEdge / edgeZone, 0.0, 1.0);
+      float lensThA = sqrt(max(0.0, 1.0 - r_normA * r_normA));
+      float litnessA = dot(surfaceNormal, uLightDirection);
+      float dirScaleA = mix(1.4, 0.6, litnessA * 0.5 + 0.5);
+      float absorptionA = 1.0 - lensThA * uEdgeAbsorption * dirScaleA;
+      finalColor *= max(0.0, absorptionA);
+
       fragColor = vec4(finalColor * mask, mask);
     }
 
@@ -462,6 +505,13 @@ void main() {
     float glowMask = step(0.01, uGlowIntensity);
     pmRgb += vec3(uGlowIntensity * 0.3 * glowMask);
     pmA = max(pmA, uGlowIntensity * 0.3 * glowMask);
+
+    // [1] Hemisphere + [2] light-modulated absorption (PATH B — no background texture)
+    float r_normB = clamp(distFromEdge / edgeZone, 0.0, 1.0);
+    float lensThB = sqrt(max(0.0, 1.0 - r_normB * r_normB));
+    float litnessB = dot(surfaceNormal, uLightDirection);
+    float dirScaleB = mix(1.4, 0.6, litnessB * 0.5 + 0.5);
+    pmRgb *= max(0.0, 1.0 - lensThB * uEdgeAbsorption * dirScaleB);
 
     fragColor = vec4(clamp(pmRgb, 0.0, 1.0) * mask, pmA * mask);
   }

@@ -44,11 +44,8 @@ class _SheetLayout extends StatelessWidget {
   final bool enableTopFade;
   final double topFadeHeight;
   final bool enableSaturationGlow;
-  // TODO(sdegenaar): wire up onFocusGained — declared and threaded through
-  // the constructor but never invoked anywhere in the package. Pre-existing
-  // on main before this PR; wiring it up is a separate decision. See #156.
-  final VoidCallback onFocusGained;
   final bool suppressInteractionOnChildren;
+  final VoidCallback? onDismiss;
 
   const _SheetLayout({
     required this.interactionScale,
@@ -89,17 +86,21 @@ class _SheetLayout extends StatelessWidget {
     required this.enableTopFade,
     required this.topFadeHeight,
     required this.enableSaturationGlow,
-    required this.onFocusGained,
     required this.suppressInteractionOnChildren,
+    this.onDismiss,
   });
 
   @override
   Widget build(BuildContext context) {
-    final handleZone = _SheetHandleZone(indicatorWidth: dragIndicatorWidth);
+    final handleZone = _SheetHandleZone(
+      indicatorWidth: dragIndicatorWidth,
+      color: dragIndicatorColor,
+      onDismiss: onDismiss,
+    );
 
     final contentZone = _SheetContent(
       scrollController: scrollController,
-      isFullScreen: contentScrollProgress > 0.95,
+      isFullScreen: contentScrollProgress > _kTopDetentThreshold,
       padding: padding,
       child: child,
     );
@@ -344,9 +345,15 @@ class _SheetLayout extends StatelessWidget {
 // ===========================================================================
 
 class _SheetHandleZone extends StatelessWidget {
-  const _SheetHandleZone({required this.indicatorWidth});
+  const _SheetHandleZone({
+    required this.indicatorWidth,
+    this.color,
+    this.onDismiss,
+  });
 
   final double indicatorWidth;
+  final Color? color;
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -358,7 +365,12 @@ class _SheetHandleZone extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           const SizedBox(height: 8),
-          _GlassDragIndicator(isGlass: isGlass, width: indicatorWidth),
+          _GlassDragIndicator(
+            isGlass: isGlass,
+            width: indicatorWidth,
+            color: color,
+            onDismiss: onDismiss,
+          ),
           const SizedBox(height: 8),
         ],
       ),
@@ -367,10 +379,17 @@ class _SheetHandleZone extends StatelessWidget {
 }
 
 class _GlassDragIndicator extends StatelessWidget {
-  const _GlassDragIndicator({required this.isGlass, required this.width});
+  const _GlassDragIndicator({
+    required this.isGlass,
+    required this.width,
+    this.color,
+    this.onDismiss,
+  });
 
   final bool isGlass;
   final double width;
+  final Color? color;
+  final VoidCallback? onDismiss;
 
   @override
   Widget build(BuildContext context) {
@@ -382,11 +401,12 @@ class _GlassDragIndicator extends StatelessWidget {
     return Semantics(
       label: 'Drag handle',
       hint: 'Swipe down to dismiss',
+      onTap: onDismiss ?? () => Navigator.maybePop(context),
       child: Container(
         width: width,
         height: 4,
         decoration: BoxDecoration(
-          color: defaultColor,
+          color: color ?? defaultColor,
           borderRadius: BorderRadius.circular(2),
         ),
       ),
@@ -409,14 +429,25 @@ class _SheetContent extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ScrollPhysics physics = isFullScreen
+        ? const _ClampingTopScrollPhysics()
+        : const _ExpandFirstScrollPhysics();
+
     return ScrollControllerProvider(
       controller: scrollController,
-      physics: isFullScreen
-          ? const _ClampingTopScrollPhysics()
-          : const NeverScrollableScrollPhysics(),
-      child: Padding(
-        padding: padding ?? EdgeInsets.zero,
-        child: child,
+      physics: physics,
+      // Publishing the physics is not enough on its own: content that never
+      // reads the provider would keep the platform default and lose both the
+      // expand-first gate and the handover, silently.
+      child: ScrollConfiguration(
+        behavior: _SheetScrollBehavior(
+          parent: ScrollConfiguration.of(context),
+          physics: physics,
+        ),
+        child: Padding(
+          padding: padding ?? EdgeInsets.zero,
+          child: child,
+        ),
       ),
     );
   }
@@ -425,6 +456,108 @@ class _SheetContent extends StatelessWidget {
 // ===========================================================================
 // Custom Scroll Physics
 // ===========================================================================
+
+/// Physics for a sheet below its topmost detent: the drag is accepted and only
+/// its forward movement is refused.
+///
+/// [NeverScrollableScrollPhysics] refuses the gesture itself, and a [Scrollable]
+/// that never started a drag has nothing to continue with when the sheet tops
+/// out mid-swipe — the finger has to lift and swipe again. Staying in the drag
+/// and zeroing the forward offset keeps the [Scrollable] live, so reaching the
+/// top detent hands the same gesture over instead of ending it.
+class _ExpandFirstScrollPhysics extends ClampingScrollPhysics {
+  const _ExpandFirstScrollPhysics({super.parent});
+
+  @override
+  _ExpandFirstScrollPhysics applyTo(ScrollPhysics? ancestor) {
+    return _ExpandFirstScrollPhysics(parent: buildParent(ancestor));
+  }
+
+  @override
+  double applyPhysicsToUserOffset(ScrollMetrics position, double offset) {
+    // A negative offset drives `pixels` forward — the finger travelling up,
+    // which below the top detent belongs to the sheet. Backward offsets pass
+    // through untouched so content left scrolled by an earlier expansion can be
+    // pulled back to its top before the drag becomes the collapse.
+    if (offset < 0.0) return 0.0;
+    return super.applyPhysicsToUserOffset(position, offset);
+  }
+
+  @override
+  Simulation? createBallisticSimulation(
+      ScrollMetrics position, double velocity) {
+    // The release velocity reaches the list as well as the sheet. Without this
+    // a flick the sheet answered by expanding also flings the list the moment
+    // the finger lifts.
+    if (velocity > 0.0 &&
+        !position.outOfRange &&
+        position.pixels <= position.minScrollExtent) {
+      return null;
+    }
+    return super.createBallisticSimulation(position, velocity);
+  }
+}
+
+/// Applies the sheet's physics to the vertical scrollables inside it, and
+/// delegates every other concern to the ambient behavior.
+///
+/// Only vertical drags are ambiguous between scrolling the content and moving
+/// the sheet, so a horizontal scrollable keeps the ambient physics and a
+/// carousel inside a sheet still feels native.
+class _SheetScrollBehavior extends ScrollBehavior {
+  const _SheetScrollBehavior({required this.parent, required this.physics});
+
+  /// The ambient behavior; everything except vertical physics defers to it.
+  final ScrollBehavior parent;
+
+  /// The physics applied to vertical scrollables at the sheet's current detent.
+  final ScrollPhysics physics;
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    // Physics are resolved from the Scrollable's own element, so the widget at
+    // this context is the Scrollable being configured.
+    final Widget scrollable = context.widget;
+    if (scrollable is Scrollable &&
+        axisDirectionToAxis(scrollable.axisDirection) != Axis.vertical) {
+      return parent.getScrollPhysics(context);
+    }
+    return physics.applyTo(parent.getScrollPhysics(context));
+  }
+
+  @override
+  TargetPlatform getPlatform(BuildContext context) =>
+      parent.getPlatform(context);
+
+  @override
+  Set<PointerDeviceKind> get dragDevices => parent.dragDevices;
+
+  @override
+  MultitouchDragStrategy getMultitouchDragStrategy(BuildContext context) =>
+      parent.getMultitouchDragStrategy(context);
+
+  @override
+  Set<LogicalKeyboardKey> get pointerAxisModifiers =>
+      parent.pointerAxisModifiers;
+
+  @override
+  Widget buildScrollbar(
+          BuildContext context, Widget child, ScrollableDetails details) =>
+      parent.buildScrollbar(context, child, details);
+
+  @override
+  Widget buildOverscrollIndicator(
+          BuildContext context, Widget child, ScrollableDetails details) =>
+      parent.buildOverscrollIndicator(context, child, details);
+
+  @override
+  GestureVelocityTrackerBuilder velocityTrackerBuilder(BuildContext context) =>
+      parent.velocityTrackerBuilder(context);
+
+  @override
+  bool shouldNotify(covariant _SheetScrollBehavior oldDelegate) =>
+      oldDelegate.parent != parent || oldDelegate.physics != physics;
+}
 
 class _ClampingTopScrollPhysics extends BouncingScrollPhysics {
   const _ClampingTopScrollPhysics({super.parent});
@@ -452,10 +585,23 @@ class _ClampingTopScrollPhysics extends BouncingScrollPhysics {
 // State Providers
 // ===========================================================================
 
+/// [InheritedWidget] that propagates a [ScrollController] and [ScrollPhysics]
+/// to descendant widgets inside a [GlassModalSheet].
+///
+/// The sheet installs [physics] on its vertical scrollables itself, so content
+/// need not read this provider to behave correctly; it remains the way to reach
+/// the shared [controller], and to opt a scrollable in explicitly. Below the
+/// topmost detent the published physics hold the content still so drags grow
+/// the sheet instead of scrolling the list inside it.
 class ScrollControllerProvider extends InheritedWidget {
+  /// The [ScrollController] shared with descendant scrollable widgets.
   final ScrollController controller;
+
+  /// The [ScrollPhysics] that the sheet applies at the current expansion level.
   final ScrollPhysics physics;
 
+  /// Creates a [ScrollControllerProvider] that exposes [controller] and
+  /// [physics] to its subtree.
   const ScrollControllerProvider({
     super.key,
     required this.controller,
@@ -463,6 +609,7 @@ class ScrollControllerProvider extends InheritedWidget {
     required super.child,
   });
 
+  /// Returns the nearest [ScrollControllerProvider] in [context], or null.
   static ScrollControllerProvider? of(BuildContext context) {
     return context
         .dependOnInheritedWidgetOfExactType<ScrollControllerProvider>();
@@ -484,6 +631,7 @@ class SheetStateInfo {
   /// Whether the sheet is currently in its expanded (full) state.
   final bool isExpanded;
 
+  /// Creates a [SheetStateInfo] snapshot.
   const SheetStateInfo({
     required this.state,
     required this.progress,
@@ -493,14 +641,17 @@ class SheetStateInfo {
 
 /// Inherited widget that provides [SheetStateInfo] to its descendants.
 class GlassModalSheetStateProvider extends InheritedWidget {
+  /// The current sheet state information.
   final SheetStateInfo info;
 
+  /// Creates a provider that exposes [info] to the widget subtree.
   const GlassModalSheetStateProvider({
     super.key,
     required this.info,
     required super.child,
   });
 
+  /// Returns the nearest [SheetStateInfo] in [context], or null.
   static SheetStateInfo? of(BuildContext context) {
     return context
         .dependOnInheritedWidgetOfExactType<GlassModalSheetStateProvider>()
@@ -508,6 +659,8 @@ class GlassModalSheetStateProvider extends InheritedWidget {
   }
 
   @override
+
+  /// Returns true when any field of [info] has changed.
   bool updateShouldNotify(GlassModalSheetStateProvider oldWidget) {
     return info.state != oldWidget.info.state ||
         info.progress != oldWidget.info.progress ||
@@ -519,6 +672,15 @@ class GlassModalSheetStateProvider extends InheritedWidget {
 // Scaffold implementation
 // ===========================================================================
 
+/// A convenience scaffold that layers a [GlassModalSheet] over a [body] widget.
+///
+/// Composes the sheet and its underlying content (e.g. a map, a photo grid)
+/// into a single widget. Use [GlassModalSheetScaffold] when you want a
+/// self-contained sheet + content stack without managing the [Stack] yourself.
+///
+/// If you need finer control \u2014 e.g. the sheet sits inside an existing
+/// [Stack] or its overlay is managed externally \u2014 use [GlassModalSheet]
+/// directly.
 class GlassModalSheetScaffold extends StatelessWidget {
   /// Body widget (e.g., a map or a list) that stays under the sheet.
   final Widget body;
@@ -535,7 +697,12 @@ class GlassModalSheetScaffold extends StatelessWidget {
   /// Initial state when the scaffold is first displayed.
   final GlassSheetState initialState;
 
-  /// Height in the 'peek' state. Default: 90.0.
+  /// Minimum visible height in the 'peek' state.
+  ///
+  /// - If 0.0 < value <= 1.0: Treated as a fraction of screen height.
+  /// - If value > 1.0: Treated as absolute pixels.
+  ///
+  /// Default: 90.0 (absolute pixels).
   final double peekSize;
 
   /// Corner radius of the top edges in its floating state.
@@ -586,7 +753,11 @@ class GlassModalSheetScaffold extends StatelessWidget {
 
   /// Optional state-specific settings that override the base [settings].
   final LiquidGlassSettings? peekSettings;
+
+  /// The settings applied when the sheet is at its half-height detent.
   final LiquidGlassSettings? halfSettings;
+
+  /// The settings applied when the sheet is fully expanded.
   final LiquidGlassSettings? fullSettings;
 
   /// Liquid stretch multiplier for over-scroll/drag effects. Default: 0.5.
@@ -655,9 +826,6 @@ class GlassModalSheetScaffold extends StatelessWidget {
   /// rubber-bands at its lowest detent instead. Forwarded to the sheet.
   final bool dismissible;
 
-  /// Whether the 'peek' state is enabled.
-  final bool? enablePeek;
-
   /// Horizontal padding specifically for the 'peek' state.
   final double? peekHorizontalMargin;
 
@@ -673,6 +841,7 @@ class GlassModalSheetScaffold extends StatelessWidget {
   /// Corner radius for 'peek' state.
   final double? peekBottomRadius;
 
+  /// Creates a [GlassModalSheetScaffold].
   const GlassModalSheetScaffold({
     super.key,
     required this.body,
@@ -719,7 +888,6 @@ class GlassModalSheetScaffold extends StatelessWidget {
     this.fullStateContentSettings,
     this.detents = const {GlassSheetDetent.medium, GlassSheetDetent.large},
     this.dismissible = true,
-    this.enablePeek,
     this.peekHorizontalMargin,
     this.peekBottomMargin,
     this.peekWidth,
@@ -789,7 +957,6 @@ class GlassModalSheetScaffold extends StatelessWidget {
           fullStateContentSettings: fullStateContentSettings,
           detents: detents,
           dismissible: dismissible,
-          enablePeek: enablePeek,
           peekHorizontalMargin: peekHorizontalMargin,
           peekBottomMargin: peekBottomMargin,
           peekWidth: peekWidth,

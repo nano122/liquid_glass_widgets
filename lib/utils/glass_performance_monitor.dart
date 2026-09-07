@@ -7,7 +7,7 @@
 /// ## Zero production overhead
 ///
 /// The monitor never registers with [SchedulerBinding] in release builds.
-/// The [kReleaseMode] guard at [start] means no callbacks, no ring-buffer
+/// The `kReleaseMode` guard at `start` means no callbacks, no ring-buffer
 /// allocations, and no CPU cycles in shipped apps.
 ///
 /// ## Usage
@@ -132,7 +132,7 @@ class GlassPerformanceMonitor {
 
   // ── Widget integration ─────────────────────────────────────────────────────
 
-  /// Called by [_PremiumGlassTracker] when a premium glass surface mounts.
+  /// Called by the internal premium glass tracker when a premium glass surface mounts.
   ///
   /// Internal — do not call directly.
   @visibleForTesting
@@ -141,7 +141,7 @@ class GlassPerformanceMonitor {
     _premiumCount++;
   }
 
-  /// Called by [_PremiumGlassTracker] when a premium glass surface unmounts.
+  /// Called by the internal premium glass tracker when a premium glass surface unmounts.
   ///
   /// Internal — do not call directly.
   @visibleForTesting
@@ -209,7 +209,7 @@ class GlassPerformanceMonitor {
             '     → BackdropFilter only, zero custom shader cost\n'
             '  3. Set GlassThemeVariant(quality: GlassQuality.standard) globally\n'
             '     → All widgets default to standard unless explicitly overridden\n'
-            '  4. On GlassBottomBar: maskingQuality: MaskingQuality.off\n'
+            '  4. On GlassTabBar.bottom: maskingQuality: MaskingQuality.off\n'
             '     → Disables dual-layer rendering (biggest single win on old GPUs)\n'
             '\n'
             'This warning only appears in debug/profile builds.\n'

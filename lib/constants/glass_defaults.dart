@@ -34,6 +34,24 @@ class GlassDefaults {
   static const double lightAngle = 0.75 * 3.14159265358979; // 0.75 * pi
 
   // ============================================================================
+  // Press Interaction
+  // ============================================================================
+
+  /// Even surface brightening of a pressed button in light mode — measured at
+  /// about +15 luma against a native iOS 26 press (0.3)
+  static const double ambientBaseLight = 0.3;
+
+  /// Dark-mode counterpart: the darker resting surface needs half the overlay
+  /// for the same read. Estimated pending a native dark-mode capture (0.14)
+  static const double ambientBaseLightDark = 0.14;
+
+  /// The pressed lift ramps over the press inflation (150 ms)
+  static const Duration ambientLiftDuration = Duration(milliseconds: 150);
+
+  /// ...and collapses on release (60 ms)
+  static const Duration ambientLiftReverseDuration = Duration(milliseconds: 60);
+
+  // ============================================================================
   // Border Radius
   // ============================================================================
 
@@ -49,8 +67,8 @@ class GlassDefaults {
   /// Sentinel radius that produces a perfect capsule (stadium) shape at any
   /// widget height.
   ///
-  /// Internally, interactive widgets such as [GlassSegmentedControl],
-  /// [GlassTabBar], and [GlassBottomBar] detect this value via a
+  /// Internally, interactive widgets such as [GlassSegmentedControl]
+  /// and [GlassTabBar] detect this value via a
   /// `>= capsuleRadius` guard and pass it straight through to the glass shader
   /// without subtracting the indicator padding inset. This guarantees a
   /// true circular pill even during jelly-bloom expansion, where the physics
@@ -58,7 +76,7 @@ class GlassDefaults {
   ///
   /// Use this constant instead of a raw `9999` literal:
   /// ```dart
-  /// GlassBottomBar(
+  /// GlassTabBar.bottom(
   ///   barBorderRadius: GlassDefaults.capsuleRadius, // true capsule
   /// )
   /// ```
@@ -113,6 +131,19 @@ class GlassDefaults {
 
   /// Slow animation duration for deliberate effects (300ms)
   static const Duration animationDurationSlow = Duration(milliseconds: 300);
+
+  /// Entrance duration of the materialize glass transition (250ms).
+  ///
+  /// Measured from iOS 26's `glassEffectTransition(.materialize)` in a 120fps
+  /// capture of the native navigation bar: the glass fades up from nothing to
+  /// settled in roughly a quarter second.
+  static const Duration materializeDuration = Duration(milliseconds: 250);
+
+  /// Exit duration of the materialize glass transition (350ms).
+  ///
+  /// The native dematerialize runs noticeably longer than the entrance — the
+  /// content blurs away first and the glass dissolves after it.
+  static const Duration dematerializeDuration = Duration(milliseconds: 350);
 
   // ============================================================================
   // Overlay / Compositor

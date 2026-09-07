@@ -239,7 +239,9 @@ void main() {
       expect(
           arena.evaluateMove(
               0, 0, GlassSheetState.half, GlassSheetState.full, 5,
-              canScrollListUp: false, hasScrollClients: false),
+              canScrollListUp: false,
+              hasScrollClients: false,
+              atTopDetent: false),
           isTrue);
     });
 
@@ -248,7 +250,9 @@ void main() {
       expect(
           arena.evaluateMove(
               0, 0, GlassSheetState.half, GlassSheetState.full, 5,
-              canScrollListUp: false, hasScrollClients: false),
+              canScrollListUp: false,
+              hasScrollClients: false,
+              atTopDetent: false),
           isFalse);
     });
 
@@ -257,7 +261,9 @@ void main() {
       expect(
           arena.evaluateMove(
               0, 0, GlassSheetState.half, GlassSheetState.full, 5,
-              canScrollListUp: false, hasScrollClients: false),
+              canScrollListUp: false,
+              hasScrollClients: false,
+              atTopDetent: false),
           isTrue);
     });
 
@@ -265,7 +271,7 @@ void main() {
       arena.beginPointer(100, 50, 0.9, PointerDeviceKind.touch);
       final r = arena.evaluateMove(
           80, 50, GlassSheetState.full, GlassSheetState.full, 5,
-          canScrollListUp: false, hasScrollClients: true);
+          canScrollListUp: false, hasScrollClients: true, atTopDetent: true);
       expect(r, isFalse);
       expect(arena.phase, GesturePhase.scrolling);
     });
@@ -274,7 +280,7 @@ void main() {
       arena.beginPointer(100, 50, 0.9, PointerDeviceKind.touch);
       final r = arena.evaluateMove(
           80, 50, GlassSheetState.full, GlassSheetState.full, 5,
-          canScrollListUp: false, hasScrollClients: false);
+          canScrollListUp: false, hasScrollClients: false, atTopDetent: true);
       expect(r, isTrue);
       expect(arena.phase, GesturePhase.contentDrag);
     });
@@ -283,7 +289,7 @@ void main() {
       arena.beginPointer(100, 50, 0.9, PointerDeviceKind.touch);
       final r = arena.evaluateMove(
           120, 50, GlassSheetState.full, GlassSheetState.full, 5,
-          canScrollListUp: true, hasScrollClients: true);
+          canScrollListUp: true, hasScrollClients: true, atTopDetent: true);
       expect(r, isFalse);
       expect(arena.phase, GesturePhase.scrolling);
     });
@@ -292,16 +298,174 @@ void main() {
       arena.beginPointer(100, 50, 0.9, PointerDeviceKind.touch);
       final r = arena.evaluateMove(
           120, 50, GlassSheetState.full, GlassSheetState.full, 5,
-          canScrollListUp: false, hasScrollClients: false);
+          canScrollListUp: false, hasScrollClients: false, atTopDetent: true);
       expect(r, isTrue);
       expect(arena.phase, GesturePhase.contentDrag);
+    });
+
+    test('a horizontal gesture locks out the sheet for the whole touch', () {
+      // Regression: the axis test used to be re-run on every move, so a
+      // sideways swipe grabbed the sheet the moment cumulative vertical
+      // travel overtook horizontal — a wobble at the end of a scroll.
+      arena.beginPointer(100, 50, 0.3, PointerDeviceKind.touch);
+      // Decisive sideways movement first.
+      expect(
+          arena.evaluateMove(
+              102, 90, GlassSheetState.half, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: false),
+          isFalse);
+      expect(arena.phase, GesturePhase.scrolling);
+      // Now drag hard vertically WITHOUT lifting. The sheet must stay out.
+      expect(
+          arena.evaluateMove(
+              -200, 90, GlassSheetState.half, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: false),
+          isFalse);
+      expect(arena.phase, GesturePhase.scrolling);
+    });
+
+    test('a long sideways scroll does not block the NEXT drag', () {
+      // The other half of the same bug: after ~220pt sideways the sheet
+      // needed >220pt vertical before it would respond. A fresh touch must
+      // start clean.
+      arena.beginPointer(100, 50, 0.3, PointerDeviceKind.touch);
+      arena.evaluateMove(
+          105, 270, GlassSheetState.half, GlassSheetState.full, 5,
+          canScrollListUp: false, hasScrollClients: true, atTopDetent: false);
+      expect(arena.phase, GesturePhase.scrolling);
+      arena.reset();
+      arena.beginPointer(100, 270, 0.3, PointerDeviceKind.touch);
+      expect(
+          arena.evaluateMove(
+              80, 270, GlassSheetState.half, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: false),
+          isTrue);
+      expect(arena.phase, GesturePhase.contentDrag);
+    });
+
+    test('stays undecided until movement clears the threshold', () {
+      // A few pixels of noise must not pick an axis.
+      arena.beginPointer(100, 50, 0.3, PointerDeviceKind.touch);
+      expect(
+          arena.evaluateMove(
+              103, 52, GlassSheetState.half, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: false),
+          isFalse);
+      expect(arena.phase, GesturePhase.idle);
+    });
+
+    test('tops out mid-drag → hands the rest of the pointer to the content',
+        () {
+      // The sheet grew from below, so the pointer starts as the sheet's.
+      arena.beginPointer(400, 50, 0.5, PointerDeviceKind.touch);
+      expect(
+          arena.evaluateMove(
+              380, 50, GlassSheetState.half, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: false),
+          isTrue);
+      expect(arena.phase, GesturePhase.contentDrag);
+
+      // Same pointer, still travelling up, now at the topmost detent.
+      expect(
+          arena.evaluateMove(
+              360, 50, GlassSheetState.full, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: true),
+          isFalse);
+      expect(arena.phase, GesturePhase.scrolling);
+      expect(arena.isVerticalGesture, isTrue);
+    });
+
+    test('does not hand over while the sheet can still grow', () {
+      arena.beginPointer(400, 50, 0.5, PointerDeviceKind.touch);
+      arena.evaluateMove(380, 50, GlassSheetState.half, GlassSheetState.full, 5,
+          canScrollListUp: false, hasScrollClients: true, atTopDetent: false);
+      // currentState already reads `full` — it carries the drag's predicted
+      // target. Only measured travel may stand the sheet down, or it would be
+      // stranded short of the detent it was predicting.
+      expect(
+          arena.evaluateMove(
+              360, 50, GlassSheetState.full, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: false),
+          isTrue);
+      expect(arena.phase, GesturePhase.contentDrag);
+    });
+
+    test('does not hand over on a downward drag at the top detent', () {
+      arena.beginPointer(400, 50, 0.9, PointerDeviceKind.touch);
+      arena.evaluateMove(380, 50, GlassSheetState.half, GlassSheetState.full, 5,
+          canScrollListUp: false, hasScrollClients: true, atTopDetent: false);
+      expect(arena.phase, GesturePhase.contentDrag);
+      // Reversing downward is the collapse, not a scroll.
+      expect(
+          arena.evaluateMove(
+              400, 50, GlassSheetState.full, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: true),
+          isTrue);
+      expect(arena.phase, GesturePhase.contentDrag);
+    });
+
+    test('content back at its top hands a downward drag to the sheet', () {
+      arena.beginPointer(100, 50, 0.9, PointerDeviceKind.touch);
+      // Content is scrolled, so it owns the downward drag first.
+      expect(
+          arena.evaluateMove(
+              120, 50, GlassSheetState.full, GlassSheetState.full, 5,
+              canScrollListUp: true, hasScrollClients: true, atTopDetent: true),
+          isFalse);
+      expect(arena.phase, GesturePhase.scrolling);
+
+      // Same pointer, content now at its top: the sheet takes the remainder.
+      expect(
+          arena.evaluateMove(
+              140, 50, GlassSheetState.full, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: true),
+          isTrue);
+      expect(arena.phase, GesturePhase.contentDrag);
+    });
+
+    test('a horizontal gesture is never woken by the reverse handover', () {
+      arena.beginPointer(100, 50, 0.9, PointerDeviceKind.touch);
+      // Decisive sideways movement parks the touch in `scrolling`.
+      arena.evaluateMove(102, 90, GlassSheetState.full, GlassSheetState.full, 5,
+          canScrollListUp: false, hasScrollClients: true, atTopDetent: true);
+      expect(arena.phase, GesturePhase.scrolling);
+      expect(arena.isVerticalGesture, isFalse);
+
+      // Downward drift at the top detent with content at its top would satisfy
+      // every other condition of the reverse handover.
+      expect(
+          arena.evaluateMove(
+              140, 90, GlassSheetState.full, GlassSheetState.full, 5,
+              canScrollListUp: false,
+              hasScrollClients: true,
+              atTopDetent: true),
+          isFalse);
+      expect(arena.phase, GesturePhase.scrolling);
     });
 
     test('half state vertical drag → contentDrag', () {
       arena.beginPointer(100, 50, 0.5, PointerDeviceKind.touch);
       final r = arena.evaluateMove(
           120, 50, GlassSheetState.half, GlassSheetState.full, 5,
-          canScrollListUp: false, hasScrollClients: false);
+          canScrollListUp: false, hasScrollClients: false, atTopDetent: false);
       expect(r, isTrue);
     });
 
@@ -309,7 +473,7 @@ void main() {
       arena.beginPointer(100, 50, 0.5, PointerDeviceKind.touch);
       final r = arena.evaluateMove(
           102, 80, GlassSheetState.half, GlassSheetState.full, 5,
-          canScrollListUp: false, hasScrollClients: false);
+          canScrollListUp: false, hasScrollClients: false, atTopDetent: false);
       expect(r, isFalse);
     });
   });
@@ -356,44 +520,24 @@ void main() {
 
     test('small in detents enables the peek floor', () {
       expect(
-        SheetGeometry.resolvePeek(
-            enablePeek: null, detents: withSmall, mode: dismissible),
+        SheetGeometry.resolvePeek(detents: withSmall, mode: dismissible),
         isTrue,
       );
     });
 
     test('no small, dismissible → no peek', () {
       expect(
-        SheetGeometry.resolvePeek(
-            enablePeek: null, detents: twoStop, mode: dismissible),
+        SheetGeometry.resolvePeek(detents: twoStop, mode: dismissible),
         isFalse,
       );
     });
 
-    test('persistent keeps its floor without small (back-compat)', () {
+    test('persistent keeps its floor without small', () {
       // A persistent sheet is DEFINED by resting instead of dismissing, so the
-      // default {medium, large} must not silently strip its floor — that would
-      // break every released persistent sheet.
+      // default {medium, large} keeps its floor.
       expect(
-        SheetGeometry.resolvePeek(
-            enablePeek: null, detents: twoStop, mode: persistent),
+        SheetGeometry.resolvePeek(detents: twoStop, mode: persistent),
         isTrue,
-      );
-    });
-
-    test('explicit enablePeek wins over the detents set, both ways', () {
-      // The deprecated flag is still an existing caller's stated intent.
-      expect(
-        SheetGeometry.resolvePeek(
-            enablePeek: false, detents: withSmall, mode: persistent),
-        isFalse,
-        reason: 'enablePeek: false must defeat small + persistent',
-      );
-      expect(
-        SheetGeometry.resolvePeek(
-            enablePeek: true, detents: twoStop, mode: dismissible),
-        isTrue,
-        reason: 'enablePeek: true must add a floor with no small present',
       );
     });
 
@@ -403,8 +547,8 @@ void main() {
         halfSize: 400,
         fullSize: 800,
         peekSize: 100,
-        enablePeek: SheetGeometry.resolvePeek(
-            enablePeek: null, detents: withSmall, mode: dismissible),
+        enablePeek:
+            SheetGeometry.resolvePeek(detents: withSmall, mode: dismissible),
         enableHalf: withSmall.contains(GlassSheetDetent.medium),
         enableFull: withSmall.contains(GlassSheetDetent.large),
       );

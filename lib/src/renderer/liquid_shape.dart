@@ -1,12 +1,11 @@
 import 'dart:math' as math;
 
-import 'package:equatable/equatable.dart';
 import 'package:flutter/widgets.dart';
 import 'liquid_glass_renderer.dart';
 
 /// Represents a shape that can be used by a [LiquidGlass] widget.
 // ignore: deprecated_member_use
-sealed class LiquidShape extends OutlinedBorder with EquatableMixin {
+sealed class LiquidShape extends OutlinedBorder {
   const LiquidShape({super.side = BorderSide.none});
 
   @protected
@@ -32,9 +31,6 @@ sealed class LiquidShape extends OutlinedBorder with EquatableMixin {
   void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
     _equivalentOutlinedBorder.paint(canvas, rect, textDirection: textDirection);
   }
-
-  @override
-  List<Object?> get props => [side];
 
   /// The effective corner radius passed to the shader for this shape.
   ///
@@ -95,7 +91,16 @@ class LiquidRoundedSuperellipse extends LiquidShape {
   }
 
   @override
-  List<Object?> get props => [...super.props, borderRadius];
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+    return other is LiquidRoundedSuperellipse &&
+        other.side == side &&
+        other.borderRadius == borderRadius;
+  }
+
+  @override
+  int get hashCode => Object.hash(side, borderRadius);
 }
 
 /// Represents an ellipse shape that can be used by a [LiquidGlass] widget.
@@ -125,6 +130,16 @@ class LiquidOval extends LiquidShape {
       side: side.scale(t),
     );
   }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+    return other is LiquidOval && other.side == side;
+  }
+
+  @override
+  int get hashCode => side.hashCode;
 }
 
 /// Represents a rounded rectangle shape that can be used by a [LiquidGlass]
@@ -172,7 +187,16 @@ class LiquidRoundedRectangle extends LiquidShape {
   }
 
   @override
-  List<Object?> get props => [...super.props, borderRadius];
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+    return other is LiquidRoundedRectangle &&
+        other.side == side &&
+        other.borderRadius == borderRadius;
+  }
+
+  @override
+  int get hashCode => Object.hash(side, borderRadius);
 }
 
 /// Represents a rounded rectangle shape with different radii for top and bottom.
@@ -230,7 +254,17 @@ class LiquidVerticalRoundedRectangle extends LiquidShape {
   }
 
   @override
-  List<Object?> get props => [...super.props, topRadius, bottomRadius];
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+    return other is LiquidVerticalRoundedRectangle &&
+        other.side == side &&
+        other.topRadius == topRadius &&
+        other.bottomRadius == bottomRadius;
+  }
+
+  @override
+  int get hashCode => Object.hash(side, topRadius, bottomRadius);
 }
 
 /// Represents a squircle shape with different radii for top and bottom.
@@ -290,5 +324,15 @@ class LiquidVerticalRoundedSuperellipse extends LiquidShape {
   }
 
   @override
-  List<Object?> get props => [...super.props, topRadius, bottomRadius];
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+    return other is LiquidVerticalRoundedSuperellipse &&
+        other.side == side &&
+        other.topRadius == topRadius &&
+        other.bottomRadius == bottomRadius;
+  }
+
+  @override
+  int get hashCode => Object.hash(side, topRadius, bottomRadius);
 }

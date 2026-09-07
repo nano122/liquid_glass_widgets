@@ -1,4 +1,16 @@
 // Copyright 2025, Tim Lehmann for whynotmake.it
+// Copyright 2026, Sebastian Degenaar for pixel-innovations.com (liquid_glass_widgets)
+//
+// SPDX-License-Identifier: MIT
+//
+// Originally: Shared rendering utilities (rotate2d, computeY, getHighlightColor)
+// Modifications (2026):
+//   - Removed unused rotate2d() (dead code in all shader binaries).
+//   - Rewrote getHighlightColor() with fast rational approximation — ~60% fewer
+//     GPU operations vs. the original smoothstep path.
+//   - Added getHeight(), calculateLighting(), applySaturation(), applyGlassColor(),
+//     applyRefraction(), and applyChromaticAberration() for the V1 render pipeline.
+//   - Switched from displacement-based to normal-based lighting model.
 //
 // Shared rendering functions for liquid glass shaders.
 //

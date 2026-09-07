@@ -280,6 +280,8 @@ class _ShowcaseHomeScreenState extends State<ShowcaseHomeScreen> {
 
           // Additional Scenarios for Standard Tab
           if (_selectedTab == 0) ...[
+            _buildMorphTriggerTile(),
+            SizedBox(height: 16),
             _buildScenarioTile(
               title: 'Static Modal',
               description: 'Disabled glow and window scaling',
@@ -554,6 +556,54 @@ class _ShowcaseHomeScreenState extends State<ShowcaseHomeScreen> {
     );
   }
 
+  /// The morph scenario: a compact trigger the sheet grows out of, rather than
+  /// a row that opens one. The button itself is the thing that morphs, so it
+  /// carries [_morphTriggerKey] and sits apart from the other scenario tiles.
+  Widget _buildMorphTriggerTile() {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Morph from trigger',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'The button empties, a glass droplet inflates into the sheet, '
+                'and dismissing pours it back.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: CupertinoColors.white.withValues(alpha: 0.54),
+                ),
+              ),
+            ],
+          ),
+        ),
+        SizedBox(width: 16),
+        // The wrapper owns the button's identity AND its opacity, so the
+        // button can empty itself while the droplet stands in for it.
+        GlassMorphTrigger(
+          builder: (context, anchor) => GlassButton.custom(
+            width: 64,
+            height: 64,
+            useOwnLayer: true,
+            quality: GlassQuality.standard,
+            shape: const LiquidRoundedSuperellipse(borderRadius: 32),
+            onTap: () => _showMorphFromTrigger(context, anchor),
+            child: Icon(
+              CupertinoIcons.add,
+              size: 28,
+              color: CupertinoColors.activeBlue,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildScenarioTile({
     required String title,
     required String description,
@@ -649,6 +699,24 @@ class _ShowcaseHomeScreenState extends State<ShowcaseHomeScreen> {
         title: 'Standard Experience',
         subtitle:
             'Explore how interactive glass elements behave inside a glass sheet.',
+      ),
+    );
+  }
+
+  /// Presents the sheet by morphing it out of the "+" button, using the same
+  /// Liquid Morph Engine that drives GlassMenu. Everything else — detents,
+  /// drag, snap — behaves exactly as it does in the scenarios above; only the
+  /// presentation changes.
+  void _showMorphFromTrigger(BuildContext context, GlassMorphAnchor anchor) {
+    GlassModalSheet.show(
+      context: context,
+      quality: widget.currentQuality,
+      morphFrom: anchor,
+      builder: (context) => const BaseScenario(
+        title: 'Morph from trigger',
+        subtitle:
+            'Presented straight out of the button, the way iOS 26 morphs glass '
+            'with glassEffectID. Tap outside to pour it back in.',
       ),
     );
   }

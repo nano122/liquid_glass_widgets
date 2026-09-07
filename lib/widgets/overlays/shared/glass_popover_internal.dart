@@ -603,6 +603,11 @@ class _GlassPopoverState extends State<GlassPopover>
       widgetQuality: widget.quality,
     );
 
+    // LiquidGlassBlendGroup requires an InheritedGeometryRenderLink from a
+    // parent LiquidGlassLayer. In minimal quality mode we skip the layer
+    // (and thus the blend group) to avoid the assert / null crash (issue #214).
+    final bool useBlendGroup = effectiveQuality != GlassQuality.minimal;
+
     final isDark = GlassTheme.brightnessOf(context) == Brightness.dark;
 
     // ── Per-frame AnimatedBuilder ────────────────────────────────────────────
@@ -667,62 +672,75 @@ class _GlassPopoverState extends State<GlassPopover>
                     settings: rampedSettings,
                     quality: effectiveQuality,
                     isBlurProvidedByAncestor: false,
-                    child: LiquidGlassBlendGroup(
-                      blend: state.blend,
-                      child: Stack(
-                        clipBehavior: Clip.none,
-                        children: [
-                          // ── Blob A: Trigger ghost ────────────────────────
-                          // Stays centred on the trigger and shrinks to 0
-                          // over the first 40 % of the open animation,
-                          // smoothly breaking the liquid bridge.
-                          Positioned(
-                            left: _triggerGlobalPosition.dx + state.pushDx,
-                            top: _triggerGlobalPosition.dy + state.pushDy,
-                            child: Transform.scale(
-                              scale: state.anchorScale,
-                              child: GlassContainer(
-                                useOwnLayer: false,
-                                settings: rampedSettings,
-                                quality: effectiveQuality,
-                                width: tw,
-                                height: th,
-                                shape: LiquidRoundedRectangle(
-                                  borderRadius: _triggerBorderRadius ??
-                                      _triggerSize!.shortestSide / 2.0,
+                    child: Builder(
+                      builder: (context) {
+                        final blobStack = Stack(
+                          clipBehavior: Clip.none,
+                          children: [
+                            // ── Blob A: Trigger ghost ────────────────────────
+                            // Stays centred on the trigger and shrinks to 0
+                            // over the first 40 % of the open animation,
+                            // smoothly breaking the liquid bridge.
+                            Positioned(
+                              left: _triggerGlobalPosition.dx + state.pushDx,
+                              top: _triggerGlobalPosition.dy + state.pushDy,
+                              child: Transform.scale(
+                                scale: state.anchorScale,
+                                child: GlassContainer(
+                                  useOwnLayer: false,
+                                  settings: rampedSettings,
+                                  quality: effectiveQuality,
+                                  width: tw,
+                                  height: th,
+                                  shape: LiquidRoundedRectangle(
+                                    borderRadius: _triggerBorderRadius ??
+                                        _triggerSize!.shortestSide / 2.0,
+                                  ),
                                 ),
                               ),
                             ),
-                          ),
 
-                          // ── Blob B: Popover body ─────────────────────────
-                          Positioned(
-                            left: _triggerGlobalPosition.dx +
-                                tw / 2.0 +
-                                state.currentDx -
-                                currentWidth / 2.0 +
-                                (_horizontalOffset * clampedValue),
-                            top: _triggerGlobalPosition.dy +
-                                th / 2.0 +
-                                state.currentDy -
-                                currentHeight / 2.0 +
-                                (_verticalOffset * clampedValue),
-                            child: IgnorePointer(
-                              ignoring: clampedValue < 0.8,
-                              child: _buildPopoverContainer(
-                                state,
-                                clampedValue,
-                                currentWidth,
-                                currentHeight,
-                                rampedSettings,
-                                effectiveQuality,
-                                isDark,
-                                popoverHeight,
+                            // ── Blob B: Popover body ─────────────────────────
+                            Positioned(
+                              left: _triggerGlobalPosition.dx +
+                                  tw / 2.0 +
+                                  state.currentDx -
+                                  currentWidth / 2.0 +
+                                  (_horizontalOffset * clampedValue),
+                              top: _triggerGlobalPosition.dy +
+                                  th / 2.0 +
+                                  state.currentDy -
+                                  currentHeight / 2.0 +
+                                  (_verticalOffset * clampedValue),
+                              child: IgnorePointer(
+                                ignoring: clampedValue < 0.8,
+                                child: _buildPopoverContainer(
+                                  state,
+                                  clampedValue,
+                                  currentWidth,
+                                  currentHeight,
+                                  rampedSettings,
+                                  effectiveQuality,
+                                  isDark,
+                                  popoverHeight,
+                                ),
                               ),
                             ),
-                          ),
-                        ],
-                      ),
+                          ],
+                        );
+
+                        // Only wrap in LiquidGlassBlendGroup when the parent
+                        // LiquidGlassLayer has provided an
+                        // InheritedGeometryRenderLink. In minimal quality mode
+                        // that layer should be skipped, so the blend group
+                        // must be too (issue #214).
+                        return useBlendGroup
+                            ? LiquidGlassBlendGroup(
+                                blend: state.blend,
+                                child: blobStack,
+                              )
+                            : blobStack;
+                      },
                     ),
                   ),
                 ),

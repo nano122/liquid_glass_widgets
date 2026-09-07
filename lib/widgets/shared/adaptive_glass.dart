@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
+import '../../src/renderer/internal/glass_materialize_scope.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 import '../../theme/glass_theme.dart';
 import 'package:flutter/foundation.dart'
@@ -36,6 +37,7 @@ import 'inherited_liquid_glass.dart';
 /// )
 /// ```
 class AdaptiveGlass extends StatelessWidget {
+  /// Creates a new [AdaptiveGlass].
   const AdaptiveGlass({
     required this.shape,
     required this.settings,
@@ -155,8 +157,36 @@ class AdaptiveGlass extends StatelessWidget {
     // we must inherit the real settings from the ancestor layer.
     final inherited =
         context.dependOnInheritedWidgetOfExactType<InheritedLiquidGlass>();
-    final baseSettings =
-        (!useOwnLayer && inherited != null) ? inherited.settings : settings;
+    // A running materialize transition dissolves this surface through the
+    // settings' visibility channel. Applying it here covers the Frosted and
+    // Standard tiers and the widget-level decorations (shadow, backer); the
+    // Premium tiers pass the raw `settings` field into a [LiquidGlassLayer],
+    // which resolves the same scope itself — the two never overlap, so the
+    // transform is never applied twice.
+    final baseSettings = GlassMaterializeScope.resolveSettings(
+      context,
+      (!useOwnLayer && inherited != null) ? inherited.settings : settings,
+    );
+    // The content channel fades and blurs the child on the tiers that render
+    // it as plain paint. Premium/grouped children flow through [LiquidGlass],
+    // which applies the same wrap internally.
+    final content = GlassMaterializeScope.wrapContent(context, child);
+
+    // ---- FULLY DEMATERIALIZED FAST-PATH --------------------------------------
+    // A surface faded to nothing renders nothing, and has to say so before any
+    // tier selection runs. `effectiveBlur` is blur × visibility, so fading a
+    // surface out drives it to zero and would route it into the frosted
+    // fallback below — a renderer with no notion of visibility, which leaves a
+    // solid tinted disc exactly where the glass was supposed to have gone.
+    //
+    // Zero opacity rather than the bare child: the premium path wraps content
+    // in `Opacity(settings.visibility)`, so at zero the icon goes with the
+    // glass. Returning the child unwrapped made it pop back into view at the
+    // exact moment the surface finished disappearing.
+    // --------------------------------------------------------------------------
+    if (baseSettings.visibility <= 0.0) {
+      return Opacity(opacity: 0.0, child: content);
+    }
 
     // ---- MINIMAL FAST-PATH ---------------------------------------------------
     // GlassQuality.minimal bypasses all custom shaders. Renders via
@@ -171,9 +201,7 @@ class AdaptiveGlass extends StatelessWidget {
     // one tier that actually blurs over a PlatformView. This finally delivers
     // the "live BackdropFilter path" the canUsePremiumShader comment promises.
     // --------------------------------------------------------------------------
-    if (quality == GlassQuality.minimal ||
-        baseSettings.effectiveBlur == 0 ||
-        platformViewBackdrop) {
+    if (quality == GlassQuality.minimal || platformViewBackdrop) {
       return _wrapWithDecorations(
         context,
         baseSettings,
@@ -185,7 +213,7 @@ class AdaptiveGlass extends StatelessWidget {
           isAccessibilityFallback: false,
           isInteractive: isInteractive,
           platformViewBackdrop: platformViewBackdrop,
-          child: child,
+          child: content,
         ),
       );
     }
@@ -215,7 +243,7 @@ class AdaptiveGlass extends StatelessWidget {
           glowIntensity: glowIntensity,
           isAccessibilityFallback: true,
           isInteractive: isInteractive,
-          child: child,
+          child: content,
         ),
       );
     }
@@ -259,7 +287,7 @@ class AdaptiveGlass extends StatelessWidget {
       if (skipNormalization) {
         normalizedSettings = baseSettings.copyWith(
           glassColor: baseSettings.glassColor.withValues(
-            alpha: (baseSettings.glassColor.a *
+            alpha: (baseSettings.effectiveGlassColor.a *
                     baseSettings.standardOpacityMultiplier)
                 .clamp(0.0, 1.0),
           ),
@@ -274,7 +302,7 @@ class AdaptiveGlass extends StatelessWidget {
           lightIntensity:
               (baseSettings.effectiveLightIntensity * 0.6).clamp(0.0, 10.0),
           glassColor: baseSettings.glassColor.withValues(
-            alpha: (baseSettings.glassColor.a *
+            alpha: (baseSettings.effectiveGlassColor.a *
                     baseSettings.standardOpacityMultiplier)
                 .clamp(0.0, 1.0),
           ),
@@ -311,21 +339,22 @@ class AdaptiveGlass extends StatelessWidget {
       // If this is a container (allowElevation=false), we are providing a blur
       // for all our children to use. We update the InheritedLiquidGlass tree.
       if (!allowElevation) {
+        final Widget container = LightweightLiquidGlass(
+          shape: shape,
+          settings: effectiveSettings,
+          densityFactor: 0.0, // Containers are never elevated
+          glowIntensity: 0.0, // Containers don't glow
+          child: InheritedLiquidGlass(
+            settings: effectiveSettings,
+            quality: quality,
+            isBlurProvidedByAncestor: true,
+            child: content,
+          ),
+        );
         return _wrapWithDecorations(
           context,
           baseSettings,
-          LightweightLiquidGlass(
-            shape: shape,
-            settings: effectiveSettings,
-            densityFactor: 0.0, // Containers are never elevated
-            glowIntensity: 0.0, // Containers don't glow
-            child: InheritedLiquidGlass(
-              settings: effectiveSettings,
-              quality: quality,
-              isBlurProvidedByAncestor: true,
-              child: child,
-            ),
-          ),
+          _fadeLightweight(baseSettings, container),
         );
       }
 
@@ -337,10 +366,14 @@ class AdaptiveGlass extends StatelessWidget {
         densityFactor: densityFactor, // 0.0 or 1.0 based on elevation
         glowIntensity:
             glowIntensity * 0.35, // Normalise additive glow to match Impeller
-        child: child,
+        child: content,
       );
 
-      return _wrapWithDecorations(context, baseSettings, lightweightWidget);
+      return _wrapWithDecorations(
+        context,
+        baseSettings,
+        _fadeLightweight(baseSettings, lightweightWidget),
+      );
     }
 
     // Impeller + Premium Path: Use the renderer's native path.
@@ -410,7 +443,7 @@ class AdaptiveGlass extends StatelessWidget {
       }
       return premiumTracker;
     } else {
-      // Grouped elements (e.g. inside GlassBottomBar) rely on the ancestor's
+      // Grouped elements (e.g. inside GlassTabBar.bottom) rely on the ancestor's
       // LiquidGlassLayer to provide the RepaintBoundary and BackdropGroup.
       // IMPORTANT: Do NOT wrap grouped elements with the shadow Stack — it
       // inserts a widget between the grouped glass and its ancestor blend
@@ -509,8 +542,29 @@ class AdaptiveGlass extends StatelessWidget {
   // like the shadow, inserting a Stack between a grouped glass and its shared
   // layer would break metaball morphing.
   // ---------------------------------------------------------------------------
+  /// Composites a lightweight-tier surface at its visibility.
+  ///
+  /// The lightweight shader has no visibility uniform — it renders at full
+  /// strength whatever the settings say — so a surface fading out on this tier
+  /// never actually goes. Compositing the finished result is legal here in a
+  /// way it is not on the premium path: this is an ordinary painted shader,
+  /// not a backdrop pass.
+  ///
+  /// Only while it bites. An [Opacity] left in the tree at full visibility is
+  /// a no-op as a blend, but not as a render object: [LightweightLiquidGlass]
+  /// captures its backdrop through a [RenderRepaintBoundary], and an extra
+  /// object in that subtree changes what gets captured. That cost is what
+  /// reverted the earlier always-on form.
+  static Widget _fadeLightweight(LiquidGlassSettings settings, Widget glass) =>
+      settings.visibility >= 1.0
+          ? glass
+          : Opacity(
+              opacity: settings.visibility.clamp(0.0, 1.0),
+              child: glass,
+            );
+
   Widget _wrapWithBacker(LiquidGlassSettings baseSettings, Widget glass) {
-    final backerColor = baseSettings.backerColor;
+    final backerColor = baseSettings.effectiveBackerColor;
     if (backerColor == null || backerColor.a == 0) return glass;
 
     return Stack(
@@ -659,7 +713,8 @@ class _FrostedFallback extends StatelessWidget {
     // value reads consistently across tiers. Minimal's tint is already a
     // uniform flat fill, so this lerp is the whole whiten here.
     const double kWhitenVeilGain = 1.5;
-    final double whiten = settings.whitenStrength.clamp(0.0, 1.0).toDouble();
+    final double whiten =
+        settings.effectiveWhitenStrength.clamp(0.0, 1.0).toDouble();
     final double veil = whiten <= 0.0
         ? 0.0
         : (whiten * kWhitenVeilGain).clamp(0.0, 1.0).toDouble();

@@ -6,11 +6,14 @@ build/
 coverage/
 
 # Local working docs
+doc/
 docs/
 .agent/
+CHANGELOG_ARCHIVE.md
 
 # Test suite — consumers don't need these; tests are on GitHub
 test/
+integration_test/
 
 # Example app platform folders
 example/ios/
@@ -28,6 +31,7 @@ example/showcase/
 example/assets/
 example/**/*.md
 example/lib/
+example/integration_test/
 
 # Tools (internal sync scripts)
 tools/

@@ -345,15 +345,44 @@ The separation between the position curve and the size curve represents how far 
 
 ---
 
-## Relationship to GlassMenu
+## Engine consumers
 
-`GlassMenu` / `GlassMenuItem` are the canonical reference implementation of the engine. If you want to see a production-grade integration, read:
+| Widget | What it morphs | Source |
+|---|---|---|
+| `GlassMenu` / `GlassMenuItem` | Trigger button → floating menu | `lib/widgets/overlays/shared/glass_menu_internal.dart` |
+| `GlassModalSheet.show(morphFrom:)` | Trigger button → presented modal sheet | `lib/widgets/overlays/shared/glass_modal_sheet_morph.dart` |
 
+### GlassMenu — the reference implementation
+
+`GlassMenu` is the canonical integration; if you want to see a production-grade one, start there. The key sections are `_GlassMenuState.initState` (controller lifecycle), `_buildMorphingContainer` (Blob B layout), and `_buildAnchorBlob` (Blob A + handoff logic).
+
+### GlassModalSheet — morphing into a presented route
+
+`GlassModalSheet.show(morphFrom:)` presents the sheet by morphing out of a trigger instead of sliding up from the edge. The trigger is wrapped in a `GlassMorphTrigger`, which hands its builder a `GlassMorphAnchor` to present with:
+
+```dart
+GlassMorphTrigger(
+  builder: (context, anchor) => GlassButton(
+    onTap: () => GlassModalSheet.show(
+      context: context,
+      morphFrom: anchor,
+      morphSpeed: MorphSpeed.normal,  // the engine's own vocabulary
+      builder: (context) => const MySheetBody(),
+    ),
+    child: const Icon(CupertinoIcons.add),
+  ),
+)
 ```
-lib/widgets/overlays/shared/glass_menu_internal.dart
-```
 
-The key sections are `_GlassMenuState.initState` (controller lifecycle), `_buildMorphingContainer` (Blob B layout), and `_buildAnchorBlob` (Blob A + handoff logic).
+Three things differ from `GlassMenu`, all of them consequences of the destination being a *route* rather than an overlay:
+
+- **The trigger has to be handed over, not just located.** `GlassMenu` owns its trigger and can empty it; a sheet presented from a route cannot hide a widget it does not own, and nothing in Flutter lets it. A `GlobalKey` would only resolve the rect — enough to aim the morph, but the trigger would keep painting under the droplet, which reads as a duplicated button. `GlassMorphTrigger` owns the key *and* the opacity, so the trigger empties for the duration and is handed back the instant the droplet is caught, carrying the spring's closing momentum so it visibly takes the hit. `morphFromRect` remains for triggers that can't be wrapped; the anchor blob is suppressed there and the droplet blooms from a point.
+- **The droplet is not the sheet.** The metaball neck only bridges shapes inside one glass layer's blend group, and the real sheet owns its own layer — so the morph renders its own two-blob droplet and hands off to the sheet at the settled instant, when both are motionless on the identical frame. The sheet stays mounted underneath for the whole morph; it is revealed, never inserted (remounting a glass widget mid-animation re-seeds its layers and shows as a glitch frame).
+- **The route animation is a signal, not a clock.** The engine keeps its own spring; the route's reverse status is only what tells the presenter to start closing. The route duration is sized to outlast the spring's *full* settle rather than the moment the droplet lands — the trigger's closing bounce is driven by that presenter, so unmounting early truncates it mid-swing and the button snaps instead of easing home.
+
+`SheetMorphGeometry` holds the pure part — where the sheet rests, where the droplet is on any given frame — and derives the destination from `SheetGeometry.positionForState`, the same call the sheet's own metrics use, so the two cannot drift apart.
+
+The morph falls back to the ordinary slide transition wherever the metaball blend is unavailable: Skia/web, `GlassQuality.minimal`, and `platformViewBackdrop`. A degraded morph — two glass shapes with no bridge between them — reads worse than the slide it would replace.
 
 ---
 

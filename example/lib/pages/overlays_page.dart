@@ -52,6 +52,15 @@ class _OverlaysPageState extends State<OverlaysPage> {
   }
 
   void _showScrollableSheet() {
+    // The sheet itself is the glass surface. Content rows inside it are plain
+    // styled Containers — glass belongs in navigation chrome, not list items.
+    const hues = [
+      Color(0xFF3D5AFE),
+      Color(0xFF00BFA5),
+      Color(0xFFFF6D00),
+      Color(0xFFD500F9),
+      Color(0xFFFFD600),
+    ];
     GlassSheet.show(
       context: context,
       settings: RecommendedGlassSettings.sheet,
@@ -60,7 +69,7 @@ class _OverlaysPageState extends State<OverlaysPage> {
         child: Column(
           children: [
             Padding(
-              padding: EdgeInsets.all(24),
+              padding: const EdgeInsets.all(24),
               child: Text(
                 'Scrollable Content',
                 style: TextStyle(
@@ -71,45 +80,57 @@ class _OverlaysPageState extends State<OverlaysPage> {
             ),
             Expanded(
               child: ListView.separated(
-                padding: EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.symmetric(horizontal: 24),
                 itemCount: 15,
-                separatorBuilder: (_, __) => SizedBox(height: 12),
-                itemBuilder: (context, index) => GlassCard(
-                  padding: EdgeInsets.all(16),
-                  child: Row(
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: Colors
-                              .primaries[index % Colors.primaries.length]
-                              .withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Center(
-                          child: Text('${index + 1}',
-                              style: TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.bold,
-                                  color: CupertinoColors.label
-                                      .resolveFrom(context))),
-                        ),
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (context, index) {
+                  final hue = hues[index % hues.length];
+                  return Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      gradient: LinearGradient(
+                        colors: [
+                          hue.withValues(alpha: 0.45),
+                          hue.withValues(alpha: 0.15),
+                        ],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                       ),
-                      SizedBox(width: 16),
-                      Text('Item ${index + 1}',
-                          style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color:
-                                  CupertinoColors.label.resolveFrom(context))),
-                    ],
-                  ),
-                ),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: hue.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Center(
+                            child: Text('${index + 1}',
+                                style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.bold,
+                                    color: CupertinoColors.label
+                                        .resolveFrom(context))),
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                        Text('Item ${index + 1}',
+                            style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: CupertinoColors.label
+                                    .resolveFrom(context))),
+                      ],
+                    ),
+                  );
+                },
               ),
             ),
             Padding(
-              padding: EdgeInsets.all(24),
+              padding: const EdgeInsets.all(24),
               child: _SheetButton(
                   label: 'Close', onTap: () => Navigator.pop(context)),
             ),
@@ -273,16 +294,7 @@ class _OverlaysPageState extends State<OverlaysPage> {
           ? GlassStatusBarStyle.light
           : GlassStatusBarStyle.dark,
       child: GlassScaffold(
-        appBar: GlassAppBar(
-          leading: GlassButton(
-            quality: GlassQuality.premium,
-            icon: Icon(CupertinoIcons.back),
-            onTap: () => Navigator.of(context).pop(),
-            width: 40,
-            height: 40,
-            iconSize: 20,
-          ),
-        ),
+        appBar: const GlassAppBar.pinned(),
         body: GlassScrollEdgeEffect(
           topFadeHeight: MediaQuery.paddingOf(context).top + 44 + 40,
           fadeBottom: false,

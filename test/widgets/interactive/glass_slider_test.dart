@@ -52,6 +52,33 @@ void main() {
       expect(value, isNot(equals(0.5)));
     });
 
+    testWidgets('RTL drag direction is reversed', (tester) async {
+      var value = 0.5;
+
+      await tester.pumpWidget(
+        createTestApp(
+          child: Directionality(
+            textDirection: TextDirection.rtl,
+            child: AdaptiveLiquidGlassLayer(
+              settings: defaultTestGlassSettings,
+              child: GlassSlider(
+                value: value,
+                onChanged: (newValue) => value = newValue,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Start drag at center and drag right. In RTL, dragging right moves towards the start of the track (0.0).
+      final sliderFinder = find.byType(GlassSlider);
+      await tester.drag(sliderFinder, const Offset(50, 0));
+      await tester.pumpAndSettle();
+
+      // Value should have DECREASED
+      expect(value, lessThan(0.5));
+    });
+
     testWidgets('calls onChangeStart and onChangeEnd', (tester) async {
       var started = false;
       var ended = false;

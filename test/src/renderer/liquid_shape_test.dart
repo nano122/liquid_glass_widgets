@@ -11,9 +11,12 @@ void main() {
     test('LiquidRoundedSuperellipse works correctly', () {
       const shape = LiquidRoundedSuperellipse(borderRadius: 20);
 
-      // Test props
-      expect(shape.props, contains(20.0));
-      expect(shape.props, contains(BorderSide.none));
+      // Test equality and hashCode
+      expect(shape, equals(const LiquidRoundedSuperellipse(borderRadius: 20)));
+      expect(shape.hashCode,
+          equals(const LiquidRoundedSuperellipse(borderRadius: 20).hashCode));
+      expect(shape,
+          isNot(equals(const LiquidRoundedSuperellipse(borderRadius: 25))));
 
       // Test copyWith
       final copied = shape.copyWith(borderRadius: 30);
@@ -33,6 +36,10 @@ void main() {
     test('LiquidOval works correctly', () {
       const shape = LiquidOval();
 
+      // Test equality and hashCode
+      expect(shape, equals(const LiquidOval()));
+      expect(shape.hashCode, equals(const LiquidOval().hashCode));
+
       // Test copyWith
       final copied = shape.copyWith(side: const BorderSide(width: 2));
       expect(copied.side.width, 2);
@@ -51,8 +58,12 @@ void main() {
     test('LiquidRoundedRectangle works correctly', () {
       const shape = LiquidRoundedRectangle(borderRadius: 15);
 
-      // Test props
-      expect(shape.props, contains(15.0));
+      // Test equality and hashCode
+      expect(shape, equals(const LiquidRoundedRectangle(borderRadius: 15)));
+      expect(shape.hashCode,
+          equals(const LiquidRoundedRectangle(borderRadius: 15).hashCode));
+      expect(
+          shape, isNot(equals(const LiquidRoundedRectangle(borderRadius: 20))));
 
       // Test copyWith
       final copied = shape.copyWith(borderRadius: 25);
@@ -73,9 +84,20 @@ void main() {
       const shape =
           LiquidVerticalRoundedRectangle(topRadius: 10, bottomRadius: 20);
 
-      // Test props
-      expect(shape.props, contains(10.0));
-      expect(shape.props, contains(20.0));
+      // Test equality and hashCode
+      expect(
+          shape,
+          equals(const LiquidVerticalRoundedRectangle(
+              topRadius: 10, bottomRadius: 20)));
+      expect(
+          shape.hashCode,
+          equals(const LiquidVerticalRoundedRectangle(
+                  topRadius: 10, bottomRadius: 20)
+              .hashCode));
+      expect(
+          shape,
+          isNot(equals(const LiquidVerticalRoundedRectangle(
+              topRadius: 15, bottomRadius: 20))));
 
       // Test copyWith
       final copied = shape.copyWith(topRadius: 15);
@@ -98,9 +120,20 @@ void main() {
       const shape =
           LiquidVerticalRoundedSuperellipse(topRadius: 5, bottomRadius: 15);
 
-      // Test props
-      expect(shape.props, contains(5.0));
-      expect(shape.props, contains(15.0));
+      // Test equality and hashCode
+      expect(
+          shape,
+          equals(const LiquidVerticalRoundedSuperellipse(
+              topRadius: 5, bottomRadius: 15)));
+      expect(
+          shape.hashCode,
+          equals(const LiquidVerticalRoundedSuperellipse(
+                  topRadius: 5, bottomRadius: 15)
+              .hashCode));
+      expect(
+          shape,
+          isNot(equals(const LiquidVerticalRoundedSuperellipse(
+              topRadius: 10, bottomRadius: 15))));
 
       // Test copyWith
       final copied = shape.copyWith(bottomRadius: 25);

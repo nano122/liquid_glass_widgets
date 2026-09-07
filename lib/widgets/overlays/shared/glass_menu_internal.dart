@@ -410,6 +410,13 @@ class _GlassMenuState extends State<GlassMenu> with TickerProviderStateMixin {
       widgetQuality: widget.quality,
     );
 
+    // LiquidGlassBlendGroup requires an InheritedGeometryRenderLink that is
+    // only present when AdaptiveLiquidGlassLayer creates a full LiquidGlassLayer.
+    // That layer is skipped in minimal quality and platformViewBackdrop mode, so
+    // we must skip the blend group in those same cases (fixes issue #214).
+    final bool useBlendGroup = effectiveQuality != GlassQuality.minimal &&
+        !widget.platformViewBackdrop;
+
     final maxRadius = math.min(currentWidth, currentHeight) / 2.0;
     final double radiusT =
         Curves.easeInExpo.transform(state.sizeT.clamp(0.0, 1.0));
@@ -458,62 +465,76 @@ class _GlassMenuState extends State<GlassMenu> with TickerProviderStateMixin {
               quality: effectiveQuality,
               blendAmount: state.blend,
               platformViewBackdrop: widget.platformViewBackdrop,
-              child: LiquidGlassBlendGroup(
-                blend: state.blend,
-                child: Stack(
-                  clipBehavior: Clip.none,
-                  children: [
-                    // ─── Blob A: Trigger Ghost ───────────────────────────────
-                    // Stays perfectly centered on the trigger, BUT absorbs the
-                    // closing momentum (pushDx/pushDy) to bounce when slammed.
-                    // Shrinks to 0 scale over the first 40% of the animation to
-                    // smoothly break the liquid bridge.
-                    // Blob A is the spawn blob; under morphFromZero there is no trigger to ghost.
-                    if (!widget.morphFromZero)
-                      Positioned(
-                        left: _triggerGlobalPosition.dx +
-                            _followOffset.dx +
-                            state.pushDx,
-                        top: _triggerGlobalPosition.dy +
-                            _followOffset.dy +
-                            state.pushDy,
-                        child: Transform.scale(
-                          scale: state.anchorScale,
-                          child: GlassContainer(
-                            useOwnLayer: false,
-                            settings: effectiveSettings,
-                            quality: effectiveQuality,
-                            platformViewBackdrop: widget.platformViewBackdrop,
-                            width: tw,
-                            height: th,
-                            shape: LiquidRoundedRectangle(
-                              borderRadius: _triggerBorderRadius ??
-                                  _triggerSize!.shortestSide / 2.0,
+              child: Builder(
+                builder: (context) {
+                  final blobStack = Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      // ─── Blob A: Trigger Ghost ─────────────────────────────
+                      // Stays perfectly centered on the trigger, BUT absorbs the
+                      // closing momentum (pushDx/pushDy) to bounce when slammed.
+                      // Shrinks to 0 scale over the first 40% of the animation to
+                      // smoothly break the liquid bridge.
+                      // Blob A is the spawn blob; under morphFromZero there is no trigger to ghost.
+                      if (!widget.morphFromZero)
+                        Positioned(
+                          left: _triggerGlobalPosition.dx +
+                              _followOffset.dx +
+                              state.pushDx,
+                          top: _triggerGlobalPosition.dy +
+                              _followOffset.dy +
+                              state.pushDy,
+                          child: Transform.scale(
+                            scale: state.anchorScale,
+                            child: GlassContainer(
+                              useOwnLayer: false,
+                              settings: effectiveSettings,
+                              quality: effectiveQuality,
+                              platformViewBackdrop: widget.platformViewBackdrop,
+                              width: tw,
+                              height: th,
+                              shape: LiquidRoundedRectangle(
+                                borderRadius: _triggerBorderRadius ??
+                                    _triggerSize!.shortestSide / 2.0,
+                              ),
                             ),
                           ),
                         ),
-                      ),
 
-                    // ── Blob B: Menu Body ───────────────────────────────────
-                    // Its center travels diagonally relative to the trigger.
-                    // By scaling the x/y offsets with the width/height curves,
-                    // its edges stay perfectly pinned while it grows!
-                    Positioned(
-                      left: blobBLeft,
-                      top: blobBTop,
-                      child: IgnorePointer(
-                        ignoring: clampedValue < 0.8,
-                        child: _buildMorphingContainer(
-                          state,
-                          clampedValue,
-                          currentWidth,
-                          currentHeight,
-                          currentRadius,
+                      // ── Blob B: Menu Body ───────────────────────────────────
+                      // Its center travels diagonally relative to the trigger.
+                      // By scaling the x/y offsets with the width/height curves,
+                      // its edges stay perfectly pinned while it grows!
+                      Positioned(
+                        left: blobBLeft,
+                        top: blobBTop,
+                        child: IgnorePointer(
+                          ignoring: clampedValue < 0.8,
+                          child: _buildMorphingContainer(
+                            state,
+                            clampedValue,
+                            currentWidth,
+                            currentHeight,
+                            currentRadius,
+                          ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  );
+
+                  // Only wrap in LiquidGlassBlendGroup when the parent
+                  // AdaptiveLiquidGlassLayer has provided an
+                  // InheritedGeometryRenderLink (i.e. a full LiquidGlassLayer
+                  // is in the tree). In minimal / platformViewBackdrop mode
+                  // that layer is skipped, so the blend group must be too
+                  // (issue #214).
+                  return useBlendGroup
+                      ? LiquidGlassBlendGroup(
+                          blend: state.blend,
+                          child: blobStack,
+                        )
+                      : blobStack;
+                },
               ),
             ),
           ),

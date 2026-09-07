@@ -20,6 +20,9 @@ Settings for the primary content and the sheet's basic behavior.
 | `isDismissible` | `bool` | `true` | (In `show`) Controls `barrierDismissible`. If `true`, the `Scaffold` background triggers `snapToState(SheetState.hidden)`. |
 | `useRootNavigator` | `bool` | `false` | (In `show`) If true, pushes the modal onto the top-level `Navigator`, bypassing local navigation stacks. |
 | `barrierLabel` | `String` | `'Dismiss'` | Accessibility label for the modal barrier. |
+| `morphFrom` | `GlassMorphAnchor?` | `null` | (In `show`) Presents by morphing out of a `GlassMorphTrigger` instead of sliding up. The anchor both locates the trigger and empties it for the duration. |
+| `morphFromRect` | `Rect?` | `null` | (In `show`) For triggers that can't be wrapped — an explicit global rect. The trigger stays painted, so the anchor blob is suppressed and the droplet blooms from the rect's centre. Mutually exclusive with `morphFrom`. |
+| `morphSpeed` | `MorphSpeed` | `normal` | (In `show`) Spring profile for the morph. `normal` is the 375 ms iOS 26 native-parity profile. Also sizes the route transition so the page stays mounted for the whole morph. |
 
 ---
 
@@ -74,7 +77,7 @@ This is where you configure the physical shape-shifting "Apple Maps" effect.
 | :--- | :--- | :--- | :--- |
 | `halfSize` | `double` | `0.45` | `(x > 1.0 ? x / screenHeight : x)`. Resolves to absolute pixels if > 1.0, otherwise fraction. |
 | `fullSize` | `double?` | `null` | If `null`, defaults to `(screenHeight - 90) / screenHeight` to mimic iOS system page sheets. |
-| `peekSize` | `double` | `90.0` | Minimum visible height. In `persistent` mode, this is the floor for all gestures. |
+| `peekSize` | `double` | `90.0` | Minimum visible height. `> 1.0` = absolute pixels; `≤ 1.0` = fraction of screen height. In `persistent` mode, this is the floor for all gestures. |
 | `horizontalMargin` | `double` | `8.0` | Base side margin. Lerps to `0.0` during the last 20% of the expansion to `full`. |
 | `peekHorizontalMargin`| `double?` | `null` | If provided, margin lerps from this value to `horizontalMargin` during Peek→Half transition. |
 | `bottomMargin` | `double` | `8.0` | Base bottom margin. In `full` state, lerps to `-extraHeight` to hide the bottom rounded edge. |
@@ -92,6 +95,45 @@ This is where you configure the physical shape-shifting "Apple Maps" effect.
 | `peekBottomRadius` | `double?` | `null` | Specific bottom radius for Peek. Morphs to `bottomBorderRadius`. |
 | `fullTopBorderRadius` | `double?` | `46.0` | Target radius for `full` state. Usually smaller than `adaptive` for a tighter look. |
 | `fullBottomBorderRadius`| `double?` | `null` | Target bottom radius for `full`. Defaults to `bottomBorderRadius` if null. |
+
+### Morphing from a Trigger (Liquid Morph Engine)
+
+`GlassModalSheet.show(morphFrom:)` swaps the slide-up entrance for the iOS 26 `glassEffectID` morph: the trigger empties, a glass droplet detaches and inflates along a J-curve, and lands exactly on the sheet's resting frame. Dismissing reverses it.
+
+Wrap the trigger in a `GlassMorphTrigger` and hand its anchor to `show()`:
+
+```dart
+GlassMorphTrigger(
+  builder: (context, anchor) => GlassButton(
+    onTap: () => GlassModalSheet.show(
+      context: context,
+      morphFrom: anchor,
+      builder: (context) => const MySheetBody(),
+    ),
+    child: const Icon(CupertinoIcons.add),
+  ),
+)
+```
+
+Everything after the morph is unchanged — detents, drag, snap, and the controller all behave exactly as they do for a slide-presented sheet. Only the presentation differs.
+
+**Why the wrapper.** A `GlobalKey` can locate the trigger but not hide it, and nothing in Flutter lets one widget hide another it doesn't own. A trigger that keeps painting while the droplet inflates on top of it reads as a duplicated button rather than a morph — so `GlassMorphTrigger` owns the key *and* the opacity. The child paints nothing while the sheet is presented, and is restored the instant the droplet is caught, displaced by the spring's closing momentum so it visibly takes the hit. Use `morphFromRect` when the trigger can't be wrapped: the morph still runs, but the anchor blob is suppressed and the droplet blooms from the rect's centre instead of stretching a teardrop out of it.
+
+**What it lands on.** The droplet aims at the *initial detent's* resting frame, resolved through `SheetGeometry.positionForState` — the same call the sheet's own render metrics use — and takes on that detent's surface, so a glass `medium` sheet hands off to glass and an opaque `large` sheet hands off to colour. At the settled instant the droplet and the sheet occupy the identical frame, and the real sheet (mounted underneath the whole time, never inserted late) takes over.
+
+**Which dismissals morph back.** All of them. A dismissal that leaves the sheet at rest — barrier tap, back gesture, `controller.snapToState(hidden)` — morphs back from its resting frame. A swipe morphs from wherever the finger let go, and the release hands that exact frame to the morph rather than snapping back to the resting one first. A swipe released short of the dismiss threshold springs back to the detent, full size and centred, carrying the finger's release momentum into the spring.
+
+**How a swipe behaves.** Below the lowest detent the sheet follows the finger on both axes and shrinks with the vertical travel. The curve is measured off iOS 26 (cursor-tracked through iPhone Mirroring) and normalised by the *card's* height, so a small panel shrinks faster per pixel than a tall sheet:
+
+- **The shrink pivots at the grabbed point**, carried down with the fall, so the content under your finger stays under your finger. The gain is 0.64 of scale per card height dragged — below 1.0, the fall always outruns the shrink, so the card's underside never lifts into view.
+- **One damped travel drives both fall and scale**: 1:1 to 0.48 of the card's height, then rubber-banding toward a 0.33 scale floor — a long drag parks the card near the bottom instead of posting it off screen. The sheet's own position keeps tracking 1:1 underneath, so the dismiss threshold is unaffected.
+- **The sideways axis opens once the dismissal is under way** (`kTouchSlop` of travel past the detent — before that a wobble belongs to the jelly-follow stretch), anchored at the crossing. The card then chases the finger through a stiff critically-damped tracking spring — fast sweeps visibly trail, slow drags read as 1:1 — toward a positional target: free while the card has room, pinned at the screen edge with a few points of give. Resistance follows where the card *is*, not how far the finger has moved.
+
+**Only morphed sheets do this.** The interactive shrink belongs to the presentation, not to the detents — the same split iOS draws between its zoom transition and `UISheetPresentationController`, whose detents "resize from one edge while the other three remain fixed" and so cannot express it. A sheet presented without `morphFrom` keeps the plain slide-away dismissal unchanged.
+
+**When it falls back.** The teardrop neck is an Impeller-only SDF metaball blend, and a morph without it — two glass shapes and no bridge — reads worse than the slide it replaces. So the sheet presents with its ordinary `SlideTransition` on Skia/web (`ImageFilter.isShaderFilterSupported == false`), in `GlassQuality.minimal`, and under `platformViewBackdrop`. Reduce Motion is handled by the engine itself, which swaps in its instant spring.
+
+Leave `morphFrom` / `morphFromRect` null and nothing about the presentation changes.
 
 ---
 

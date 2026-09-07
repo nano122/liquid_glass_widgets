@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:liquid_glass_widgets/src/renderer/internal/liquid_glass_self_scale_scope.dart';
 import 'package:liquid_glass_widgets/src/renderer/stretch.dart';
 
 void main() {
@@ -155,6 +156,191 @@ void main() {
         ),
       );
       expect(find.byType(LiquidStretch), findsOneWidget);
+    });
+
+    testWidgets('carries an ancestor self-scale declaration through',
+        (tester) async {
+      late bool seen;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: LiquidGlassSelfScaleScope(
+            selfScaled: true,
+            child: LiquidStretch(
+              interactionScale: 1.01,
+              child: Builder(
+                builder: (context) {
+                  seen = LiquidGlassSelfScaleScope.of(context);
+                  return const SizedBox(width: 56, height: 56);
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+      expect(seen, isTrue,
+          reason: 'a swiped sheet\'s declaration must reach the glass below '
+              'the press scale, which resolves only the nearest scope (#229)');
+    });
+
+    // The press scale follows a native 56 pt glass circle measured at 120 fps:
+    // up to its scale in ~150 ms with a small overshoot, settled by ~280 ms;
+    // back down through a ~6 % undershoot at ~170 ms and a ~3 % rebound,
+    // settled by ~550 ms. Sized by pressGrowth as a button is: 30 px on
+    // 100 pt is the reference circle's 1.3×.
+    group('press scale spring', () {
+      /// The uniform scale the stretch applies to its child.
+      double scaleOf(WidgetTester tester) => tester
+          .renderObject<RenderBox>(find.byType(SizedBox))
+          .getTransformTo(tester.renderObject(find.byType(LiquidStretch)))
+          .entry(0, 0);
+
+      Future<List<double>> sample(
+        WidgetTester tester, {
+        required int untilMs,
+      }) async {
+        final samples = <double>[];
+        for (var ms = 0; ms < untilMs; ms += 10) {
+          await tester.pump(const Duration(milliseconds: 10));
+          samples.add(scaleOf(tester));
+        }
+        return samples;
+      }
+
+      Future<TestGesture> press(
+        WidgetTester tester, {
+        double? pressGrowth,
+        double interactionScale = 1.0,
+      }) async {
+        await tester.pumpWidget(
+          MaterialApp(
+            home: Center(
+              child: LiquidStretch(
+                interactionScale: interactionScale,
+                pressGrowth: pressGrowth,
+                stretch: 0,
+                child: const SizedBox(width: 100, height: 100),
+              ),
+            ),
+          ),
+        );
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.byType(SizedBox)));
+        await tester.pump();
+        return gesture;
+      }
+
+      testWidgets('inflates quickly with a small overshoot', (tester) async {
+        await press(tester, pressGrowth: 30);
+        final s = await sample(tester, untilMs: 600);
+        // Index i is the value 10·(i+1) ms after touch-down.
+        expect(s[14], greaterThan(1.28), reason: 'at 150 ms');
+        final peak = s.reduce((a, b) => a > b ? a : b);
+        expect(peak, inInclusiveRange(1.302, 1.33), reason: 'overshoot');
+        for (var i = 31; i < s.length; i++) {
+          expect(s[i], closeTo(1.3, 0.01),
+              reason: 'settled at ${10 * (i + 1)} ms');
+        }
+      });
+
+      testWidgets('release undershoots, rebounds and settles', (tester) async {
+        final gesture = await press(tester, pressGrowth: 30);
+        await sample(tester, untilMs: 600);
+        await gesture.up();
+        await tester.pump();
+        final s = await sample(tester, untilMs: 800);
+        final low = s.reduce((a, b) => a < b ? a : b);
+        expect(low, inInclusiveRange(0.94, 0.985), reason: 'undershoot');
+        expect(s.indexOf(low), lessThan(22),
+            reason: 'undershoot before 220 ms');
+        final rebound =
+            s.sublist(s.indexOf(low)).reduce((a, b) => a > b ? a : b);
+        expect(rebound, greaterThan(1.0), reason: 'rebound past rest');
+        for (var i = 59; i < s.length; i++) {
+          expect(s[i], closeTo(1.0, 0.01),
+              reason: 'settled at ${10 * (i + 1)} ms');
+        }
+      });
+
+      testWidgets('a fixed factor keeps the critically damped spring',
+          (tester) async {
+        final gesture = await press(tester, interactionScale: 1.3);
+        final pressed = await sample(tester, untilMs: 600);
+        expect(pressed.reduce((a, b) => a > b ? a : b), lessThan(1.301),
+            reason: 'no overshoot');
+        expect(pressed.last, closeTo(1.3, 0.01));
+        await gesture.up();
+        await tester.pump();
+        final released = await sample(tester, untilMs: 800);
+        expect(released.reduce((a, b) => a < b ? a : b), greaterThan(0.999),
+            reason: 'no undershoot');
+        expect(released.last, closeTo(1.0, 0.01));
+      });
+    });
+  });
+
+  group('LiquidStretch.pressGrowth', () {
+    Future<TestGesture> press(WidgetTester tester, Size size) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Center(
+            child: LiquidStretch(
+              pressGrowth: 17,
+              stretch: 0,
+              child: SizedBox(width: size.width, height: size.height),
+            ),
+          ),
+        ),
+      );
+      final gesture =
+          await tester.startGesture(tester.getCenter(find.byType(SizedBox)));
+      await tester.pump();
+      return gesture;
+    }
+
+    /// The uniform scale RawLiquidStretch applies to its child.
+    double scaleOf(WidgetTester tester) {
+      final child = tester.renderObject<RenderBox>(find.byType(SizedBox));
+      final stretch =
+          tester.renderObject<RenderBox>(find.byType(RawLiquidStretch));
+      return child.getTransformTo(stretch).entry(0, 0);
+    }
+
+    testWidgets('grows the longest side by pressGrowth', (tester) async {
+      await press(tester, const Size(132, 44));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      expect(scaleOf(tester), closeTo(1 + 17 / 132, 0.001));
+    });
+
+    testWidgets('a circle inflates more than a pill', (tester) async {
+      await press(tester, const Size(56, 56));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      expect(scaleOf(tester), closeTo(1 + 17 / 56, 0.001));
+    });
+
+    testWidgets('declares itself self-scaled only while below rest',
+        (tester) async {
+      final gesture = await press(tester, const Size(56, 56));
+      bool selfScaled() => tester
+          .widget<LiquidGlassSelfScaleScope>(
+              find.byType(LiquidGlassSelfScaleScope))
+          .selfScaled;
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      expect(selfScaled(), isFalse, reason: 'inflated, not shrunk');
+
+      await gesture.up();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 170));
+      expect(scaleOf(tester), lessThan(1.0), reason: 'undershoot');
+      expect(selfScaled(), isTrue, reason: 'the undershoot is a self-scale');
+
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      expect(scaleOf(tester), closeTo(1.0, 0.001));
+      expect(selfScaled(), isFalse, reason: 'at rest a push-back may freeze');
     });
   });
 

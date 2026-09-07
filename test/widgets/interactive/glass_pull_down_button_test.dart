@@ -159,6 +159,86 @@ void main() {
       expect(btn.semanticLabel, isNull);
     });
   });
+
+  // ────────────────────────────────────────────────────────────────────────────
+  // Issue #214: Minimal quality & platformViewBackdrop regression
+  // ────────────────────────────────────────────────────────────────────────────
+
+  testWidgets(
+      'GlassPullDownButton opens and functions properly in minimal quality mode (#214)',
+      (WidgetTester tester) async {
+    String selectedAction = '';
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AdaptiveLiquidGlassLayer(
+            quality: GlassQuality.minimal,
+            child: Center(
+              child: GlassPullDownButton(
+                label: 'Options',
+                buttonWidth: 200,
+                quality: GlassQuality.minimal,
+                onSelected: (value) => selectedAction = value,
+                items: [
+                  GlassMenuItem(
+                    title: 'Option A',
+                    onTap: () {},
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Options'), findsOneWidget);
+    expect(find.text('Option A'), findsNothing);
+
+    // Tap button to open menu in minimal quality mode
+    await tester.tap(find.text('Options'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    // Menu should be open and rendered without throwing InheritedGeometryRenderLink assertion
+    expect(find.text('Option A'), findsOneWidget);
+
+    await tester.tap(find.text('Option A'));
+    await tester.pumpAndSettle();
+
+    expect(selectedAction, equals('Option A'));
+  });
+
+  testWidgets(
+      'GlassMenu opens in minimal quality mode with platformViewBackdrop (#214)',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: GlassMenu(
+              quality: GlassQuality.minimal,
+              platformViewBackdrop: true,
+              trigger: const Text('Open Menu'),
+              items: [
+                GlassMenuItem(
+                  title: 'Item 1',
+                  onTap: () {},
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open Menu'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('Item 1'), findsOneWidget);
+  });
 }
 
 void _noop() {}

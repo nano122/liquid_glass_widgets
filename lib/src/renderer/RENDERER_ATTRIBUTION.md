@@ -51,29 +51,20 @@ building custom glass widgets.
 
 ---
 
-## Syncing upstream changes
+## Evolution and in-tree maintenance
 
-Use the sync script for new upstream releases:
+As of v1.0.0+, the renderer inside `lib/src/renderer/` is maintained directly in-tree
+as the internal rendering engine for `liquid_glass_widgets`.
 
-```bash
-./tools/sync_renderer.sh <version>
-# e.g. ./tools/sync_renderer.sh 0.2.0-dev.5
-```
+The engine has significantly diverged from the initial 0.2.0-dev.4 baseline with:
+- Windows SkSL / SPIR-V shader portability and validation (`glslangValidator`)
+- Custom shader uniform pipelines for `GlassMaterialize` and accessibility
+- Tier-routing optimizations (`AdaptiveGlass`, `effectiveBlur > 0` pass-1 bypass)
+- Platform-view glass passthrough mode and custom specular configurations
 
-The script automatically:
-- Copies and import-fixes the 11 "clean" Dart files
-- Syncs the 6 shaders we use
-- Stages the 5 structurally-modified files for manual diff
-- Updates this file's version/date
-- Runs `flutter analyze`
-
-After the script: manually reconcile the 5 staged structural files
-(`liquid_glass.dart`, `liquid_glass_render_scope.dart`,
-`liquid_glass_blend_group.dart`, `rendering/liquid_glass_layer.dart`,
-`shaders.dart`), then delete `.upstream_<version>/` and run `flutter test`.
-
-Mark any local deviations with `// [LOCAL PATCH]: <reason>` so they are
-obvious during the next sync.
+Upstream changes from `whynotmake-it/flutter_liquid_glass` are no longer synced via
+automated scripts; any relevant upstream improvements are manually reviewed, adapted,
+and integrated into the custom engine.
 
 ---
 

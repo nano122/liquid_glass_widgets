@@ -1,4 +1,16 @@
 // Copyright 2025, Tim Lehmann for whynotmake.it
+// Copyright 2026, Sebastian Degenaar for pixel-innovations.com (liquid_glass_widgets)
+//
+// SPDX-License-Identifier: MIT
+//
+// Originally: Basic displacement encoding (R/G offset, B height, A alpha)
+// Modifications (2026):
+//   - Rewrote encoding scheme from displacement-based (offset vectors) to
+//     true surface normal (V1): R/G store unit normal XY mapped to [0,1],
+//     B stores normalized height, A stores SDF anti-aliasing alpha.
+//   - Replaced encodeDisplacementData() with encodeGeometryData(normalXY, …)
+//   - Added decodeNormalXY() and decodeHeight() decode helpers.
+//   - Updated texture layout docs to reflect V1 format.
 //
 // Shared utilities for encoding and decoding geometry data.
 //

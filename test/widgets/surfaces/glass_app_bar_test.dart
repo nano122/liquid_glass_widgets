@@ -35,8 +35,34 @@ void main() {
           ),
         ),
       );
-
       expect(find.text('App Title'), findsOneWidget);
+
+      // Verify it wraps the title in a DefaultTextStyle for Cupertino styling
+      final defaultTextStyle = tester.widget<DefaultTextStyle>(
+        find
+            .ancestor(
+              of: find.text('App Title'),
+              matching: find.byType(DefaultTextStyle),
+            )
+            .first,
+      );
+
+      final BuildContext context = tester.element(find.byType(GlassAppBar));
+      expect(
+        defaultTextStyle.style,
+        equals(CupertinoTheme.of(context).textTheme.navTitleTextStyle),
+      );
+
+      // Verify it adds header semantics
+      final semantics = tester.widget<Semantics>(
+        find
+            .ancestor(
+              of: find.text('App Title'),
+              matching: find.byType(Semantics),
+            )
+            .first,
+      );
+      expect(semantics.properties.header, isTrue);
     });
 
     testWidgets('displays leading widget', (tester) async {
@@ -96,14 +122,26 @@ void main() {
         ),
       );
 
-      final center = tester.widget<Center>(
-        find.descendant(
-          of: find.byType(GlassAppBar),
-          matching: find.byType(Center),
-        ),
-      );
+      // With the CustomMultiChildLayout delegate the title is centred
+      // geometrically — there is no Center widget in the tree to find.
+      // Assert the invariant directly: title midpoint ≈ bar midpoint.
+      final titleFinder = find.text('Centered');
+      expect(titleFinder, findsOneWidget);
 
-      expect(center, isNotNull);
+      final appBarBox =
+          tester.renderObject<RenderBox>(find.byType(GlassAppBar));
+      final barCenter =
+          appBarBox.localToGlobal(Offset.zero).dx + appBarBox.size.width / 2;
+
+      final titleBox = tester.renderObject<RenderBox>(titleFinder);
+      final titleCenter =
+          titleBox.localToGlobal(Offset.zero).dx + titleBox.size.width / 2;
+
+      expect(
+        titleCenter,
+        closeTo(barCenter, 2.0),
+        reason: 'Default centerTitle:true should centre title on the bar',
+      );
     });
 
     testWidgets('left-aligns title when centerTitle is false', (tester) async {
@@ -329,7 +367,8 @@ void main() {
         ),
       );
 
-      // Should render without Opacity or Stack (no glass)
+      // The bar itself should never contain a BackdropFilter — glass belongs
+      // on the individual buttons (GlassButton), not the bar surface.
       expect(find.byType(GlassAppBar), findsOneWidget);
       expect(
         find.descendant(
@@ -337,13 +376,15 @@ void main() {
           matching: find.byType(Opacity),
         ),
         findsNothing,
+        reason: 'No Opacity wrappers without a largeTitleController',
       );
       expect(
         find.descendant(
           of: find.byType(GlassAppBar),
-          matching: find.byType(Stack),
+          matching: find.byType(BackdropFilter),
         ),
         findsNothing,
+        reason: 'GlassAppBar is a layout container — glass belongs on buttons',
       );
     });
 
@@ -392,6 +433,121 @@ void main() {
       );
       expect(scope.defaultQuality, equals(GlassQuality.premium),
           reason: 'App bar buttons should default to premium quality');
+    });
+  });
+
+  group('title centering', () {
+    testWidgets(
+        'title is centred on full bar width when leading button is present '
+        '(regression #198)', (tester) async {
+      // Use a fixed-width surface so we can measure absolute positions.
+      const barWidth = 390.0;
+      await tester.pumpWidget(
+        createTestApp(
+          child: SizedBox(
+            width: barWidth,
+            child: Scaffold(
+              appBar: GlassAppBar(
+                title: const Text('Title'),
+                leading: const SizedBox(width: 44, height: 44),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Find the Text widget that renders the title.
+      final titleFinder = find.text('Title');
+      expect(titleFinder, findsOneWidget);
+
+      final titleBox = tester.renderObject<RenderBox>(titleFinder);
+      final titlePos = titleBox.localToGlobal(Offset.zero);
+      final titleCenter = titlePos.dx + titleBox.size.width / 2;
+
+      // Find the bar's RenderBox to get its actual rendered width.
+      final appBarBox =
+          tester.renderObject<RenderBox>(find.byType(GlassAppBar));
+      final barCenter =
+          appBarBox.localToGlobal(Offset.zero).dx + appBarBox.size.width / 2;
+
+      // Title center must be within 2 px of the bar center.
+      // Without the Stack fix this would be shifted ~22 px to the right.
+      expect(
+        titleCenter,
+        closeTo(barCenter, 2.0),
+        reason: 'Title should be centred on the full bar width, not just the '
+            'space remaining after the leading widget (bug #198)',
+      );
+    });
+
+    testWidgets(
+        'title is centred on full bar width with both leading and actions '
+        '(symmetric — existing behaviour preserved)', (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: const Scaffold(
+            appBar: GlassAppBar(
+              title: Text('Title'),
+              leading: SizedBox(width: 44, height: 44),
+              actions: [SizedBox(width: 44, height: 44)],
+            ),
+          ),
+        ),
+      );
+
+      final titleFinder = find.text('Title');
+      expect(titleFinder, findsOneWidget);
+
+      final titleBox = tester.renderObject<RenderBox>(titleFinder);
+      final titlePos = titleBox.localToGlobal(Offset.zero);
+      final titleCenter = titlePos.dx + titleBox.size.width / 2;
+
+      final appBarBox =
+          tester.renderObject<RenderBox>(find.byType(GlassAppBar));
+      final barCenter =
+          appBarBox.localToGlobal(Offset.zero).dx + appBarBox.size.width / 2;
+
+      expect(
+        titleCenter,
+        closeTo(barCenter, 2.0),
+        reason: 'Symmetric leading + actions should also be centred',
+      );
+    });
+
+    testWidgets('centerTitle: false aligns title to leading edge',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: const Scaffold(
+            appBar: GlassAppBar(
+              // ignore: avoid_redundant_argument_values
+              centerTitle: false,
+              title: Text('Left Title'),
+              leading: SizedBox(width: 44, height: 44),
+            ),
+          ),
+        ),
+      );
+
+      final titleFinder = find.text('Left Title');
+      expect(titleFinder, findsOneWidget);
+
+      final appBarBox =
+          tester.renderObject<RenderBox>(find.byType(GlassAppBar));
+      final barCenter =
+          appBarBox.localToGlobal(Offset.zero).dx + appBarBox.size.width / 2;
+
+      final titleBox = tester.renderObject<RenderBox>(titleFinder);
+      final titleCenter =
+          titleBox.localToGlobal(Offset.zero).dx + titleBox.size.width / 2;
+
+      // Title should be left-aligned, so its centre is well to the left
+      // of the bar's centre.
+      expect(
+        titleCenter,
+        lessThan(barCenter),
+        reason: 'centerTitle: false should left-align the title',
+      );
     });
   });
 }

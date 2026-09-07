@@ -1,8 +1,8 @@
+// ignore_for_file: public_member_api_docs
+
 import 'package:flutter/widgets.dart';
-import 'package:meta/meta.dart';
 import 'interaction_notification.dart';
 
-@internal
 class GlassDragBuilder extends StatefulWidget {
   const GlassDragBuilder({
     required this.builder,

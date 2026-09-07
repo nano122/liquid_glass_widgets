@@ -11,9 +11,9 @@ void main() {
   // ──────────────────────────────────────────────────────────────────────────
 
   group('LiquidShape', () {
-    test('LiquidOval props includes side', () {
+    test('LiquidOval equality and hashCode', () {
       const shape = LiquidOval();
-      expect(shape.props, isA<List>());
+      expect(shape.hashCode, equals(const LiquidOval().hashCode));
     });
 
     test('LiquidOval equality', () {
@@ -100,9 +100,10 @@ void main() {
       expect(a, isNot(equals(b)));
     });
 
-    test('props includes borderRadius', () {
-      const shape = LiquidRoundedSuperellipse(borderRadius: 15);
-      expect(shape.props, contains(15.0));
+    test('hashCode holds for same values', () {
+      const a = LiquidRoundedSuperellipse(borderRadius: 15);
+      const b = LiquidRoundedSuperellipse(borderRadius: 15);
+      expect(a.hashCode, equals(b.hashCode));
     });
 
     test('copyWith creates new instance with updated borderRadius', () {
@@ -174,9 +175,10 @@ void main() {
       expect(a, isNot(equals(b)));
     });
 
-    test('props includes borderRadius', () {
-      const shape = LiquidRoundedRectangle(borderRadius: 12);
-      expect(shape.props, contains(12.0));
+    test('hashCode holds for same values', () {
+      const a = LiquidRoundedRectangle(borderRadius: 12);
+      const b = LiquidRoundedRectangle(borderRadius: 12);
+      expect(a.hashCode, equals(b.hashCode));
     });
 
     test('copyWith updates borderRadius', () {

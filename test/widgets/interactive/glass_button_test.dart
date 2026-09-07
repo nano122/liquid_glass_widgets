@@ -1,3 +1,7 @@
+import 'package:liquid_glass_widgets/src/renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_widgets/theme/glass_interaction_settings.dart';
+import 'package:liquid_glass_widgets/theme/glass_theme.dart';
+import 'package:liquid_glass_widgets/theme/glass_theme_data.dart';
 import 'package:liquid_glass_widgets/types/glass_quality.dart';
 import 'package:liquid_glass_widgets/widgets/interactive/glass_button.dart';
 import 'package:flutter/cupertino.dart';
@@ -146,17 +150,10 @@ void main() {
         ),
       );
 
-      final sizedBox = tester.widget<SizedBox>(
-        find
-            .descendant(
-              of: find.byType(GlassButton),
-              matching: find.byType(SizedBox),
-            )
-            .first,
-      );
+      final size = tester.getSize(find.byType(GlassButton));
 
-      expect(sizedBox.width, equals(customWidth));
-      expect(sizedBox.height, equals(customHeight));
+      expect(size.width, equals(customWidth));
+      expect(size.height, equals(customHeight));
     });
 
     testWidgets('GlassButton.custom shrink-wraps to child when sizes are null',
@@ -255,9 +252,116 @@ void main() {
       expect(button.enabled, isTrue);
       expect(button.useOwnLayer, isFalse);
       expect(button.quality, isNull);
-      expect(button.interactionScale, equals(1.05));
+      expect(button.interactionScale, isNull);
+      expect(button.anchorStretchSettings, isNull);
       expect(button.stretch, equals(0.5));
       expect(button.resistance, equals(0.01));
+    });
+  });
+
+  group('GlassButton interaction resolution', () {
+    /// The LiquidStretch the button builds from its params and the theme.
+    LiquidStretch stretchOf(WidgetTester tester) =>
+        tester.widget<LiquidStretch>(
+          find.descendant(
+            of: find.byType(GlassButton),
+            matching: find.byType(LiquidStretch),
+          ),
+        );
+
+    Widget themed({
+      required GlassInteractionSettings interaction,
+      required Widget child,
+    }) =>
+        createTestApp(
+          child: GlassTheme(
+            data: GlassThemeData(interaction: interaction),
+            child: AdaptiveLiquidGlassLayer(
+              settings: defaultTestGlassSettings,
+              child: child,
+            ),
+          ),
+        );
+
+    testWidgets('defaults to the native sizing', (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(Icons.star),
+              onTap: () {},
+            ),
+          ),
+        ),
+      );
+
+      final stretch = stretchOf(tester);
+      expect(stretch.pressGrowth, equals(17));
+      expect(stretch.interactionScale, equals(1.0));
+      expect(stretch.anchorStretchSettings.intensity, equals(0.1));
+      expect(stretch.anchorStretchSettings.squashFactor, equals(0.1));
+      expect(stretch.anchorStretchSettings.translationDamping, equals(0.1));
+      expect(stretch.anchorStretchSettings.bounciness, equals(0.0));
+    });
+
+    testWidgets('an explicit interactionScale is a fixed factor',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(Icons.star),
+              onTap: () {},
+              interactionScale: 1.15,
+            ),
+          ),
+        ),
+      );
+
+      final stretch = stretchOf(tester);
+      expect(stretch.interactionScale, equals(1.15));
+      expect(stretch.pressGrowth, isNull);
+    });
+
+    testWidgets('the theme supplies a fixed factor and stretch settings',
+        (tester) async {
+      await tester.pumpWidget(
+        themed(
+          interaction: const GlassInteractionSettings(
+            interactionScale: 1.2,
+            anchorStretchSettings: AnchorStretchSettings(intensity: 0.7),
+          ),
+          child: GlassButton(
+            icon: const Icon(Icons.star),
+            onTap: () {},
+          ),
+        ),
+      );
+
+      final stretch = stretchOf(tester);
+      expect(stretch.interactionScale, equals(1.2));
+      expect(stretch.pressGrowth, isNull);
+      expect(stretch.anchorStretchSettings.intensity, equals(0.7));
+    });
+
+    testWidgets('explicit anchorStretchSettings win over the theme',
+        (tester) async {
+      await tester.pumpWidget(
+        themed(
+          interaction: const GlassInteractionSettings(
+            anchorStretchSettings: AnchorStretchSettings(intensity: 0.7),
+          ),
+          child: GlassButton(
+            icon: const Icon(Icons.star),
+            onTap: () {},
+            anchorStretchSettings: const AnchorStretchSettings(intensity: 0.4),
+          ),
+        ),
+      );
+
+      expect(stretchOf(tester).anchorStretchSettings.intensity, equals(0.4));
     });
   });
 

@@ -1,9 +1,11 @@
+// ignore_for_file: public_member_api_docs
+
 import 'dart:math' as math;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter/rendering.dart';
 import 'internal/glass_drag_builder.dart';
-import 'package:meta/meta.dart';
+import 'internal/liquid_glass_self_scale_scope.dart';
 import '../../utils/glass_spring.dart';
 
 /// Configuration for the anchor stretch effect on interactive glass widgets.
@@ -65,6 +67,16 @@ class AnchorStretchSettings {
   ///
   /// Defaults to `0.15` — a subtle overshoot matching native iOS 26 buttons.
   final double bounciness;
+
+  /// The stretch a native iOS 26 button shows on a long drag: no more than
+  /// ~5 % of elongation with matching squash, a few points of travel, and no
+  /// rebound of its own — the release bounce lives in the press scale.
+  static const AnchorStretchSettings nativeTremor = AnchorStretchSettings(
+    intensity: 0.1,
+    squashFactor: 0.1,
+    translationDamping: 0.1,
+    bounciness: 0.0,
+  );
 }
 
 /// A widget that provides a squash and stretch effect to its child based on
@@ -78,6 +90,7 @@ class LiquidStretch extends StatelessWidget {
   const LiquidStretch({
     required this.child,
     this.interactionScale = 1.05,
+    this.pressGrowth,
     this.stretch = .5,
     this.resistance = .01,
     this.hitTestBehavior = HitTestBehavior.opaque,
@@ -105,6 +118,22 @@ class LiquidStretch extends StatelessWidget {
   ///
   /// Defaults to 1.05.
   final double interactionScale;
+
+  /// How many logical pixels the widget's longest side grows when pressed.
+  ///
+  /// When set, the press scale is derived from the widget's size at layout
+  /// and [interactionScale] is ignored. A native iOS 26 button grows by about
+  /// the same number of points whatever its size — measured at ~17 pt
+  /// ([nativePressGrowth]), so a 56 pt circle inflates ~1.3× and a 132 pt
+  /// pill ~1.13×.
+  ///
+  /// Defaults to null (use [interactionScale]).
+  final double? pressGrowth;
+
+  /// The [pressGrowth] a native iOS 26 button shows: ~17 pt along its longest
+  /// side, measured at 120 fps on a 56 pt circle (1.3×) and a 132 pt pill
+  /// (1.13×).
+  static const double nativePressGrowth = 17.0;
 
   /// The factor to multiply the drag offset by to determine the stretch
   /// amount in pixels.
@@ -204,61 +233,103 @@ class LiquidStretch extends StatelessWidget {
       behavior: hitTestBehavior,
       suppressInteractionOnChildren: suppressInteractionOnChildren,
       builder: (context, value, child) {
-        final scale = value == null ? 1.0 : interactionScale;
-        return SpringBuilder(
-          value: scale,
-          spring:
-              GlassSpring.smooth(duration: const Duration(milliseconds: 300)),
-          builder: (context, value, child) => Transform.scale(
-            // Avoid exact 1.0 to prevent RenderTransform layer drops on resting
-            scale: value == 1.0 ? 1.00001 : value,
-            child: child,
-          ),
-          child: OffsetSpringBuilder(
-            value: () {
-              if (value == null) return Offset.zero;
-              Offset o = value.withResistance(resistance);
-              if (axis == Axis.horizontal) {
-                o = Offset(o.dx, 0);
-              } else if (axis == Axis.vertical) {
-                o = Offset(0, o.dy);
-              }
-              // Apply per-axis overrides, falling back to the shared flags.
-              final effectiveAllowPositiveX = allowPositiveX ?? allowPositive;
-              final effectiveAllowNegativeX = allowNegativeX ?? allowNegative;
-              final effectiveAllowPositiveY = allowPositiveY ?? allowPositive;
-              final effectiveAllowNegativeY = allowNegativeY ?? allowNegative;
-              o = Offset(
-                (!effectiveAllowPositiveX && o.dx > 0)
-                    ? 0
-                    : (!effectiveAllowNegativeX && o.dx < 0)
-                        ? 0
-                        : o.dx,
-                (!effectiveAllowPositiveY && o.dy > 0)
-                    ? 0
-                    : (!effectiveAllowNegativeY && o.dy < 0)
-                        ? 0
-                        : o.dy,
-              );
-              return o;
-            }(),
-            spring: value == null
-                ? GlassSpring.bouncy(
-                    extraBounce: anchorStretchSettings.bounciness,
+        final pressed = value != null;
+        // With pressGrowth the spring drives a 0→1 progress and the render
+        // object sizes the scale; otherwise it drives the scale itself.
+        final pressTarget = pressGrowth != null
+            ? (pressed ? 1.0 : 0.0)
+            : (pressed ? interactionScale : 1.0);
+        // The native sizing brings the native springs, measured on 56 pt
+        // circle and 132 pt pill glass (iOS 26/27): the press reaches its
+        // scale in ~150 ms with a small overshoot and settles by ~250 ms; the
+        // release is back through rest in ~60–90 ms, dips a few percent of
+        // its travel at ~150 ms and is still by ~250 ms on the pill, ~500 ms
+        // on the circle — one clean undershoot, no second wobble. A fixed
+        // factor keeps the critically damped spring it always had.
+        final pressSpring = pressGrowth == null
+            ? GlassSpring.smooth(duration: const Duration(milliseconds: 300))
+            : pressed
+                ? GlassSpring.snappy(
+                    duration: const Duration(milliseconds: 250),
+                    extraBounce: 0.1,
                   )
-                : GlassSpring.interactive(),
-            builder: (context, value, child) => RawLiquidStretch(
-              stretchPixels: value * stretch,
-              axis: axis,
-              anchorStretch: anchorStretch,
-              anchorStretchIntensity: anchorStretchSettings.intensity,
-              anchorSquashFactor: anchorStretchSettings.squashFactor,
-              anchorTranslationDamping:
-                  anchorStretchSettings.translationDamping,
-              child: child,
-            ),
+                : GlassSpring.bouncy(
+                    duration: const Duration(milliseconds: 280),
+                    extraBounce: 0.15,
+                  );
+        return OffsetSpringBuilder(
+          value: () {
+            if (value == null) return Offset.zero;
+            Offset o = value.withResistance(resistance);
+            if (axis == Axis.horizontal) {
+              o = Offset(o.dx, 0);
+            } else if (axis == Axis.vertical) {
+              o = Offset(0, o.dy);
+            }
+            // Apply per-axis overrides, falling back to the shared flags.
+            final effectiveAllowPositiveX = allowPositiveX ?? allowPositive;
+            final effectiveAllowNegativeX = allowNegativeX ?? allowNegative;
+            final effectiveAllowPositiveY = allowPositiveY ?? allowPositive;
+            final effectiveAllowNegativeY = allowNegativeY ?? allowNegative;
+            o = Offset(
+              (!effectiveAllowPositiveX && o.dx > 0)
+                  ? 0
+                  : (!effectiveAllowNegativeX && o.dx < 0)
+                      ? 0
+                      : o.dx,
+              (!effectiveAllowPositiveY && o.dy > 0)
+                  ? 0
+                  : (!effectiveAllowNegativeY && o.dy < 0)
+                      ? 0
+                      : o.dy,
+            );
+            return o;
+          }(),
+          spring: value == null
+              ? GlassSpring.bouncy(
+                  extraBounce: anchorStretchSettings.bounciness,
+                )
+              : GlassSpring.interactive(),
+          builder: (context, offset, child) => SpringBuilder(
+            value: pressTarget,
+            spring: pressSpring,
+            builder: (context, press, child) {
+              final growth = pressGrowth;
+              final stretched = RawLiquidStretch(
+                stretchPixels: offset * stretch,
+                pressGrowthPixels: growth == null ? 0.0 : press * growth,
+                axis: axis,
+                anchorStretch: anchorStretch,
+                anchorStretchIntensity: anchorStretchSettings.intensity,
+                anchorSquashFactor: anchorStretchSettings.squashFactor,
+                anchorTranslationDamping:
+                    anchorStretchSettings.translationDamping,
+                child: child,
+              );
+              // A surface scaling itself keeps its backdrop where it was;
+              // declare so, or the release undershoot below 1.0 reads as a
+              // sheet push-back and freezes the premium refraction until
+              // the scale is back at rest. An ancestor's declaration (a
+              // swiped sheet, a materializing shell) is carried through, as
+              // the glass below resolves only the nearest scope.
+              return LiquidGlassSelfScaleScope(
+                selfScaled: LiquidGlassSelfScaleScope.of(context) ||
+                    (growth == null
+                        ? press < LiquidGlassSelfScaleScope.freezeScaleThreshold
+                        : press < 0.0),
+                child: growth == null
+                    ? Transform.scale(
+                        // Avoid exact 1.0 to prevent RenderTransform layer
+                        // drops on resting
+                        scale: press == 1.0 ? 1.00001 : press,
+                        child: stretched,
+                      )
+                    : stretched,
+              );
+            },
             child: child,
           ),
+          child: child,
         );
       },
       child: child,
@@ -277,9 +348,11 @@ class LiquidStretch extends StatelessWidget {
 /// handling and resistance.
 /// {@endtemplate}
 class RawLiquidStretch extends SingleChildRenderObjectWidget {
+  /// Creates a new [RawLiquidStretch].
   const RawLiquidStretch({
     required this.stretchPixels,
     required super.child,
+    this.pressGrowthPixels = 0.0,
     this.axis,
     this.anchorStretch = false,
     this.anchorStretchIntensity = 0.5,
@@ -290,6 +363,11 @@ class RawLiquidStretch extends SingleChildRenderObjectWidget {
 
   /// The stretch offset in pixels.
   final Offset stretchPixels;
+
+  /// How many logical pixels the longest side is currently inflated by.
+  ///
+  /// Applied as a uniform scale about the centre before the stretch.
+  final double pressGrowthPixels;
 
   /// The axis to constrain the stretch to.
   final Axis? axis;
@@ -310,6 +388,7 @@ class RawLiquidStretch extends SingleChildRenderObjectWidget {
   RenderObject createRenderObject(BuildContext context) {
     return RenderRawLiquidStretch(
       stretchPixels: stretchPixels,
+      pressGrowthPixels: pressGrowthPixels,
       axis: axis,
       anchorStretch: anchorStretch,
       anchorStretchIntensity: anchorStretchIntensity,
@@ -324,6 +403,7 @@ class RawLiquidStretch extends SingleChildRenderObjectWidget {
     RenderRawLiquidStretch renderObject,
   ) {
     renderObject.stretchPixels = stretchPixels;
+    renderObject.pressGrowthPixels = pressGrowthPixels;
     renderObject.axis = axis;
     renderObject.anchorStretch = anchorStretch;
     renderObject.anchorStretchIntensity = anchorStretchIntensity;
@@ -332,16 +412,17 @@ class RawLiquidStretch extends SingleChildRenderObjectWidget {
   }
 }
 
-@internal
 class RenderRawLiquidStretch extends RenderProxyBox {
   RenderRawLiquidStretch({
     required Offset stretchPixels,
+    double pressGrowthPixels = 0.0,
     Axis? axis,
     bool anchorStretch = false,
     double anchorStretchIntensity = 0.5,
     double anchorSquashFactor = 0.3,
     double anchorTranslationDamping = 0.15,
   })  : _stretchPixels = stretchPixels,
+        _pressGrowthPixels = pressGrowthPixels,
         _axis = axis,
         _anchorStretch = anchorStretch,
         _anchorStretchIntensity = anchorStretchIntensity,
@@ -349,6 +430,7 @@ class RenderRawLiquidStretch extends RenderProxyBox {
         _anchorTranslationDamping = anchorTranslationDamping;
 
   Offset _stretchPixels;
+  double _pressGrowthPixels;
   Axis? _axis;
   bool _anchorStretch;
   double _anchorStretchIntensity;
@@ -403,6 +485,20 @@ class RenderRawLiquidStretch extends RenderProxyBox {
     }
     _stretchPixels = value;
     markNeedsPaint();
+  }
+
+  /// How many logical pixels the longest side is currently inflated by.
+  double get pressGrowthPixels => _pressGrowthPixels;
+  set pressGrowthPixels(double value) {
+    if (_pressGrowthPixels == value) return;
+    _pressGrowthPixels = value;
+    markNeedsPaint();
+  }
+
+  /// The uniform press scale, from [pressGrowthPixels] and the longest side.
+  double get _pressScale {
+    final longest = math.max(size.width, size.height);
+    return longest > 0 ? 1.0 + _pressGrowthPixels / longest : 1.0;
   }
 
   /// Signed smoothstep: maps [-edge..+edge] → [-1..+1] with smooth
@@ -482,18 +578,27 @@ class RenderRawLiquidStretch extends RenderProxyBox {
   }
 
   Matrix4? _getEffectiveTransform() {
+    final matrix = Matrix4.identity();
+
+    // Press inflation: a uniform scale about the centre, under the stretch.
+    final pressScale = _pressScale;
+    if (pressScale != 1.0) {
+      matrix
+        ..translateByDouble(size.width / 2, size.height / 2, 0.0, 1.0)
+        ..scaleByDouble(pressScale, pressScale, 1.0, 1.0)
+        ..translateByDouble(-size.width / 2, -size.height / 2, 0.0, 1.0);
+    }
+
     if (_stretchPixels == Offset.zero) {
       // Avoid exact identity to prevent TransformLayer detachment on rest
       // ignore: deprecated_member_use
-      return Matrix4.identity()..translateByDouble(0.0001, 0.0, 0.0, 1.0);
+      return matrix..translateByDouble(0.0001, 0.0, 0.0, 1.0);
     }
 
     final scale = getScale(
       stretchPixels: _stretchPixels,
       size: size,
     );
-
-    final matrix = Matrix4.identity();
 
     // If axis is constrained, scale from the opposite edge
     if (_axis == Axis.vertical) {
@@ -608,7 +713,6 @@ class RenderRawLiquidStretch extends RenderProxyBox {
     return matrix;
   }
 
-  @internal
   Offset getScale({
     required Offset stretchPixels,
     required Size size,

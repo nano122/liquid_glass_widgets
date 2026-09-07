@@ -21,7 +21,7 @@ enum GlassActionSheetStyle {
   cancel,
 }
 
-/// An action that can be taken from a [GlassActionSheet].
+/// An action that can be taken from a [showGlassActionSheet] call.
 class GlassActionSheetAction {
   /// Creates an action sheet action.
   const GlassActionSheetAction({
@@ -46,7 +46,7 @@ class GlassActionSheetAction {
 
 /// A glass morphism action sheet following iOS 26 liquid glass design.
 ///
-/// [GlassActionSheet] provides an iOS-style bottom action sheet with:
+/// This action sheet provides an iOS-style bottom action sheet with:
 /// - iOS 26 liquid glass backdrop effect
 /// - Bottom-anchored action list
 /// - Destructive action styling (red text/icon)
@@ -136,7 +136,7 @@ class GlassActionSheetAction {
 /// - **GlassActionSheet**: Predefined action list (like iOS UIAlertController)
 /// - **GlassSheet**: Custom content (like iOS UISheetPresentationController)
 ///
-/// Use [GlassActionSheet] when you need a simple action picker.
+/// Use [showGlassActionSheet] when you need a simple action picker.
 /// Use [GlassSheet] when you need custom content or forms.
 Future<T?> showGlassActionSheet<T>({
   required BuildContext context,

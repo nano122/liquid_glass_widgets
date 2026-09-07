@@ -44,6 +44,10 @@ class _GlassModalSheetState extends State<GlassModalSheet>
   final GestureArena _gestureArena = GestureArena();
   final ScrollController _scrollController = ScrollController();
 
+  /// Latest vertical metrics seen from the content subtree, including content
+  /// scrolling on a [ScrollController] of its own.
+  ScrollMetrics? _contentMetrics;
+
   // ── Geometry & Metrics ────────────────────────────────────────────────────
   late SheetGeometry _geometry;
   Size _screenSize = Size.zero;
@@ -94,6 +98,14 @@ class _GlassModalSheetState extends State<GlassModalSheet>
       widget.controller?._attach(this);
     }
 
+    // Metrics outlive the scrollable that sent them. New content may have no
+    // scrollable at all, and stale metrics reporting it scrolled would hand
+    // downward drags to something that no longer exists, leaving the sheet
+    // unable to collapse.
+    if (widget.child != oldWidget.child) {
+      _contentMetrics = null;
+    }
+
     final oldGeometry = _geometry;
     _geometry = _buildGeometry();
 
@@ -142,16 +154,10 @@ class _GlassModalSheetState extends State<GlassModalSheet>
         halfSize: widget.halfSize,
         fullSize: widget.fullSize,
         peekSize: widget.peekSize,
-        // Precedence lives in SheetGeometry.resolvePeek so it's unit-testable.
         enablePeek: SheetGeometry.resolvePeek(
-          // ignore: deprecated_member_use_from_same_package
-          enablePeek: widget.enablePeek,
           detents: widget.detents,
           mode: widget.mode,
         ),
-        // Public detents set → the internal per-detent bools the geometry
-        // runs on. Keeping SheetGeometry on bools leaves the physics /
-        // scroll-arena logic untouched by the surface change.
         enableHalf: widget.detents.contains(GlassSheetDetent.medium),
         enableFull: widget.detents.contains(GlassSheetDetent.large),
         dismissible: widget.dismissible,
@@ -219,6 +225,15 @@ class _GlassModalSheetState extends State<GlassModalSheet>
     // target mid-gesture. `_settledState` only updates inside this
     // branch, ensuring side effects fire on every consumer-visible
     // state transition.
+    // Reconcile `_currentState` on EVERY snap, not just on consumer-visible
+    // transitions. `_applyDrag` and `_jumpTo` mutate it silently to the
+    // in-flight *predicted* target, so a drag that ends back at the state it
+    // started from leaves that prediction behind: the sheet rests at `half`
+    // while `_currentState` still reads `full`. `evaluateMove` then takes its
+    // `currentState == maxState` branch and refuses every upward drag, so the
+    // sheet appears stuck until a downward drag re-predicts and resyncs it.
+    _currentState = state;
+
     if (state != _settledState) {
       if (state == GlassSheetState.peek || state == GlassSheetState.hidden) {
         HapticFeedback.lightImpact();
@@ -226,7 +241,6 @@ class _GlassModalSheetState extends State<GlassModalSheet>
         HapticFeedback.mediumImpact();
       }
 
-      _currentState = state;
       _settledState = state;
       widget.onStateChanged?.call(state);
 
@@ -262,6 +276,14 @@ class _GlassModalSheetState extends State<GlassModalSheet>
   // ════════════════════════════════════════════════════════════════════════
 
   bool _onScrollNotification(ScrollNotification notification) {
+    // Vertical only. Scroll notifications bubble from ANY descendant, so a
+    // horizontal list inside the sheet — a date strip, a carousel — emits
+    // exactly this shape when it is pulled past its leading edge. Without the
+    // axis guard the sheet claimed the gesture and re-anchored its vertical
+    // drag origin to the finger's current y, so scrolling sideways dragged
+    // the sheet, and the re-anchoring could hold `dy` under the threshold
+    // indefinitely, leaving the sheet unable to expand.
+    if (notification.metrics.axis != Axis.vertical) return false;
     if (notification is OverscrollNotification && notification.overscroll < 0) {
       if (_gestureArena.phase == GesturePhase.scrolling ||
           _gestureArena.phase == GesturePhase.idle) {
@@ -324,6 +346,37 @@ class _GlassModalSheetState extends State<GlassModalSheet>
     _frozenState = null;
   }
 
+  void _recordContentMetrics(ScrollMetrics metrics) {
+    if (axisDirectionToAxis(metrics.axisDirection) != Axis.vertical) return;
+    _contentMetrics = metrics;
+  }
+
+  /// Whether anything inside the sheet can scroll.
+  ///
+  /// Content is free to keep a controller of its own, which the sheet's
+  /// controller cannot see — without the observed metrics the sheet would read
+  /// that as "no scrollable" and claim every drag.
+  bool get _hasScrollClients =>
+      _scrollController.hasClients || _contentCanScroll;
+
+  /// Whether the observed content has somewhere to scroll to. Content that
+  /// fits its viewport must leave the drag with the sheet, which still has its
+  /// rubber-band to play.
+  bool get _contentCanScroll {
+    final ScrollMetrics? metrics = _contentMetrics;
+    return metrics != null && metrics.maxScrollExtent > metrics.minScrollExtent;
+  }
+
+  /// Whether the content is scrolled away from its top, so a downward drag
+  /// belongs to the content before it belongs to the sheet.
+  bool get _canScrollListUp {
+    if (_scrollController.hasClients && _scrollController.offset > 0) {
+      return true;
+    }
+    final ScrollMetrics? metrics = _contentMetrics;
+    return metrics != null && metrics.pixels > metrics.minScrollExtent;
+  }
+
   void _onPointerMove(PointerMoveEvent event) {
     if (_isInteractingWithChild) {
       return;
@@ -343,9 +396,9 @@ class _GlassModalSheetState extends State<GlassModalSheet>
       _currentState,
       _geometry.maxState,
       10.0,
-      hasScrollClients: _scrollController.hasClients,
-      canScrollListUp:
-          _scrollController.hasClients && _scrollController.offset > 0,
+      hasScrollClients: _hasScrollClients,
+      canScrollListUp: _canScrollListUp,
+      atTopDetent: _contentScrollProgress > _kTopDetentThreshold,
     );
 
     if (shouldClaim) {
@@ -679,18 +732,26 @@ class _GlassModalSheetState extends State<GlassModalSheet>
         effectiveHeight = targetVisualHeight - effectiveBottom;
       } else {
         // Dismissible mode: hiding downwards
-        final pivotPos = _geometry.enablePeek
-            ? _geometry.positionForState(GlassSheetState.peek, mqHeight)
-            : halfPos;
+        // Shared with the morph, so the droplet measures the swipe from the
+        // same detent the sheet falls away from.
+        final pivotPos = _geometry.positionForState(
+          SheetMorphGeometry.dismissPivotState(_geometry),
+          mqHeight,
+        );
 
         final pivotVisualHeight = pivotPos * mqHeight;
 
         if (pos < pivotPos && pivotPos > 0.001) {
-          // Sliding from hidden up to pivot
-          final slideProgress = (pos / pivotPos).clamp(0.0, 1.0);
-          final offscreenBottom = -(pivotVisualHeight + 100.0);
-          effectiveBottom =
-              lerpDouble(offscreenBottom, peekBMargin, slideProgress)!;
+          // Swipe-to-dismiss, below the lowest detent: the sheet tracks the
+          // finger 1:1. No overshoot is needed — at `pos == 0` a 1:1 frame
+          // lands its top edge exactly on the screen's bottom edge, so the
+          // sheet is fully gone, and it stays under the finger on the way.
+          //
+          // A morphed presentation layers its own scale and horizontal offset
+          // over this frame (see `GlassSheetMorphPresenter`); deliberately not
+          // applied here, so a sheet with no trigger to morph back into keeps
+          // the plain slide-away.
+          effectiveBottom = peekBMargin - (pivotPos - pos) * mqHeight;
           effectiveHeight = pivotVisualHeight - peekBMargin;
           hPad = peekHPad;
           topRadius = peekTRadius;
@@ -918,13 +979,25 @@ class _GlassModalSheetState extends State<GlassModalSheet>
           enableSaturationGlow: widget.enableSaturationGlow,
           enableTopFade: widget.enableTopFade,
           topFadeHeight: widget.topFadeHeight,
-          onFocusGained: () {
-            if (_currentState != _geometry.maxState) {
-              _snapToState(_geometry.maxState);
-            }
-          },
+          onDismiss: () => _snapToState(GlassSheetState.hidden),
           suppressInteractionOnChildren: widget.suppressInteractionOnChildren,
           child: focusBridge,
+        );
+
+        // ScrollMetricsNotification covers content that has not been dragged
+        // yet, so the first drag already knows whether the content can scroll.
+        result = NotificationListener<ScrollMetricsNotification>(
+          onNotification: (notification) {
+            _recordContentMetrics(notification.metrics);
+            return false;
+          },
+          child: NotificationListener<ScrollNotification>(
+            onNotification: (notification) {
+              _recordContentMetrics(notification.metrics);
+              return false;
+            },
+            child: result,
+          ),
         );
 
         if (widget.suppressInteractionOnChildren) {

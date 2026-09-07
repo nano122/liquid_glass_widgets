@@ -9,7 +9,7 @@ import '../../utils/accessibility_config.dart' as glass_config;
 //
 //   • Reduce Motion  — MediaQuery.disableAnimationsOf(context)
 //     When true, jelly/spring animations collapse to instant snaps.
-//     Affects: GlassSegmentedControl, GlassTabBar, GlassBottomBar, GlassSwitch,
+//     Affects: GlassSegmentedControl, GlassTabBar, GlassSwitch,
 //              GlassSlider — every widget that uses GlassSpring internally.
 //
 //   • Reduce Transparency — MediaQuery.highContrastOf(context)
@@ -72,6 +72,7 @@ import '../../utils/accessibility_config.dart' as glass_config;
 /// Obtain with [GlassAccessibilityData.of] or [GlassAccessibilityData.maybeOf].
 @immutable
 class GlassAccessibilityData {
+  /// Creates a new [GlassAccessibilityData].
   const GlassAccessibilityData({
     required this.reduceMotion,
     required this.reduceTransparency,

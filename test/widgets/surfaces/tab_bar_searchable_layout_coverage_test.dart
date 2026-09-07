@@ -53,5 +53,124 @@ void main() {
 
       expect(cancelTapped, true);
     });
+
+    testWidgets(
+        'collapsed tab pill icon resolves correctly in dark and light modes (#208)',
+        (tester) async {
+      // 1. Dark mode — icon should resolve to white (CupertinoColors.label.darkColor)
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(),
+          home: Scaffold(
+            body: GlassTabBar.searchable(
+              tabs: const [
+                GlassTab(
+                    icon: Icon(Icons.photo_outlined),
+                    activeIcon: Icon(Icons.photo),
+                    label: 'Home'),
+                GlassTab(
+                    icon: Icon(Icons.list_alt_outlined),
+                    activeIcon: Icon(Icons.list_alt),
+                    label: 'List'),
+              ],
+              selectedIndex: 0,
+              onTabSelected: (_) {},
+              isSearchActive: true,
+              searchConfig: GlassSearchBarConfig(
+                onSearchToggle: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final darkIconTheme = tester.widget<IconTheme>(
+        find
+            .ancestor(
+              of: find.byIcon(Icons.photo),
+              matching: find.byType(IconTheme),
+            )
+            .first,
+      );
+      expect(darkIconTheme.data.color, const Color(0xFFFFFFFF));
+
+      // 2. Light mode — icon should resolve to black (CupertinoColors.label.color)
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.light(),
+          home: Scaffold(
+            body: GlassTabBar.searchable(
+              tabs: const [
+                GlassTab(
+                    icon: Icon(Icons.photo_outlined),
+                    activeIcon: Icon(Icons.photo),
+                    label: 'Home'),
+                GlassTab(
+                    icon: Icon(Icons.list_alt_outlined),
+                    activeIcon: Icon(Icons.list_alt),
+                    label: 'List'),
+              ],
+              selectedIndex: 0,
+              onTabSelected: (_) {},
+              isSearchActive: true,
+              searchConfig: GlassSearchBarConfig(
+                onSearchToggle: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final lightIconTheme = tester.widget<IconTheme>(
+        find
+            .ancestor(
+              of: find.byIcon(Icons.photo),
+              matching: find.byType(IconTheme),
+            )
+            .first,
+      );
+      expect(lightIconTheme.data.color, const Color(0xFF000000));
+
+      // 3. Custom unselectedIconColor is respected
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData.dark(),
+          home: Scaffold(
+            body: GlassTabBar.searchable(
+              tabs: const [
+                GlassTab(
+                    icon: Icon(Icons.photo_outlined),
+                    activeIcon: Icon(Icons.photo),
+                    label: 'Home'),
+                GlassTab(
+                    icon: Icon(Icons.list_alt_outlined),
+                    activeIcon: Icon(Icons.list_alt),
+                    label: 'List'),
+              ],
+              selectedIndex: 0,
+              unselectedIconColor: const Color(0xFFFF0000),
+              onTabSelected: (_) {},
+              isSearchActive: true,
+              searchConfig: GlassSearchBarConfig(
+                onSearchToggle: (_) {},
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final customIconTheme = tester.widget<IconTheme>(
+        find
+            .ancestor(
+              of: find.byIcon(Icons.photo),
+              matching: find.byType(IconTheme),
+            )
+            .first,
+      );
+      expect(customIconTheme.data.color, const Color(0xFFFF0000));
+    });
   });
 }

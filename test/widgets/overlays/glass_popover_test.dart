@@ -607,4 +607,34 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.text('EarlyContent'), findsOneWidget);
   });
+
+  testWidgets('GlassPopover renders and opens in minimal quality mode (#214)',
+      (WidgetTester tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: GlassPopover(
+              quality: GlassQuality.minimal,
+              trigger: const SizedBox(
+                width: 60,
+                height: 40,
+                child: Text('OpenPopover'),
+              ),
+              contentBuilder: (context, close) => const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text('MinimalContent'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('OpenPopover'));
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    expect(find.text('MinimalContent'), findsOneWidget);
+  });
 }

@@ -428,6 +428,63 @@ void main() {
       expect(changes, [(GlassQuality.standard, GlassQuality.premium)]);
     });
 
+    test('a neutral window decays recovery progress rather than erasing it',
+        () {
+      // Regression: recovery requires `upgradeWindowCount` CONSECUTIVE
+      // under-budget windows, and a neutral window used to reset that
+      // counter to zero. Because the measure is P95 — a tail statistic — an
+      // ordinary scrolling list drifts into the neutral band often enough
+      // that the counter never reached the threshold, so a single transient
+      // cost demoted quality permanently with no path back.
+      final changes = <(GlassQuality, GlassQuality)>[];
+      final adapter = _makeAdapter(allowStepUp: true, changes: changes);
+      _runWarmup(adapter, rasterUs: 5000);
+
+      // Degrade to standard.
+      for (int i = 0; i < 3; i++) {
+        adapter.simulateFrameTimings(_frames(5, 30000));
+      }
+      expect(adapter.currentQuality, GlassQuality.standard);
+      changes.clear();
+
+      // Nine under-budget windows: one short of the step-up threshold.
+      // Under-budget is 16 x 0.6 = 9.6 ms, so 2 ms qualifies.
+      for (int i = 0; i < 9; i++) {
+        adapter.simulateFrameTimings(_frames(5, 2000));
+      }
+      expect(adapter.currentQuality, GlassQuality.standard);
+
+      // One neutral window — 15 ms sits between 9.6 ms and 24 ms, so it is
+      // neither jank nor comfortably fast. This must not wipe the nine.
+      adapter.simulateFrameTimings(_frames(5, 15000));
+
+      // Nine more good windows. With the counter decayed to 8 rather than
+      // reset to 0, the threshold is crossed. Under the old behaviour this
+      // run would end at 9 and the adapter would stay demoted forever.
+      for (int i = 0; i < 9; i++) {
+        adapter.simulateFrameTimings(_frames(5, 2000));
+      }
+
+      expect(adapter.currentQuality, GlassQuality.premium);
+      expect(changes, [(GlassQuality.standard, GlassQuality.premium)]);
+    });
+
+    test('a sustained over-budget window still degrades immediately', () {
+      // Guard for the other side of the same branch: the decay must not make
+      // degradation any slower or any less certain.
+      final changes = <(GlassQuality, GlassQuality)>[];
+      final adapter = _makeAdapter(allowStepUp: true, changes: changes);
+      _runWarmup(adapter, rasterUs: 5000);
+      expect(adapter.currentQuality, GlassQuality.premium);
+
+      for (int i = 0; i < 3; i++) {
+        adapter.simulateFrameTimings(_frames(5, 30000));
+      }
+
+      expect(adapter.currentQuality, GlassQuality.standard);
+      expect(changes, [(GlassQuality.premium, GlassQuality.standard)]);
+    });
+
     test('step-up is blocked while cooldown is active', () {
       GlassQualityAdapter.cooldownDuration = const Duration(hours: 1);
       final changes = <(GlassQuality, GlassQuality)>[];
@@ -853,6 +910,60 @@ void main() {
       }
 
       expect(adapter.lastFramesMeasured, GlassQualityAdapter.windowSize);
+    });
+  });
+
+  group('percentile math and Quickselect', () {
+    test('single element returns itself', () {
+      expect(GlassQualityAdapter.percentileForTesting([42], 50), 42);
+      expect(GlassQualityAdapter.percentileForTesting([42], 0), 42);
+      expect(GlassQualityAdapter.percentileForTesting([42], 100), 42);
+    });
+
+    test('matches full sort across all percentiles', () {
+      final samples = [
+        28,
+        12,
+        45,
+        1,
+        99,
+        34,
+        56,
+        78,
+        12,
+        90,
+        3,
+        17,
+        65,
+        88,
+        23
+      ];
+      final sorted = List<int>.from(samples)..sort();
+
+      for (int p = 0; p <= 100; p += 5) {
+        final rank = ((p / 100.0) * samples.length).ceil();
+        final expectedIndex = (rank - 1).clamp(0, samples.length - 1);
+        final expected = sorted[expectedIndex];
+        final actual = GlassQualityAdapter.percentileForTesting(samples, p);
+        expect(actual, expected, reason: 'failed at percentile $p');
+      }
+    });
+
+    test('quickSelect handles already sorted, reverse, and identical arrays',
+        () {
+      final sorted = [1, 2, 3, 4, 5, 6, 7];
+      expect(GlassQualityAdapter.quickSelectForTesting(List.of(sorted), 0), 1);
+      expect(GlassQualityAdapter.quickSelectForTesting(List.of(sorted), 3), 4);
+      expect(GlassQualityAdapter.quickSelectForTesting(List.of(sorted), 6), 7);
+
+      final reverse = [7, 6, 5, 4, 3, 2, 1];
+      expect(GlassQualityAdapter.quickSelectForTesting(List.of(reverse), 0), 1);
+      expect(GlassQualityAdapter.quickSelectForTesting(List.of(reverse), 3), 4);
+      expect(GlassQualityAdapter.quickSelectForTesting(List.of(reverse), 6), 7);
+
+      final identical = [5, 5, 5, 5, 5];
+      expect(
+          GlassQualityAdapter.quickSelectForTesting(List.of(identical), 2), 5);
     });
   });
 }

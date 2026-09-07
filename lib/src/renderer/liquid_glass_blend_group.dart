@@ -1,7 +1,10 @@
+// ignore_for_file: public_member_api_docs
+
 import 'dart:ui';
 
 import 'package:flutter/widgets.dart';
-import 'package:flutter_shaders/flutter_shaders.dart';
+import 'internal/fragment_shader_extensions.dart';
+import 'internal/multi_shader_builder.dart';
 import 'liquid_glass_renderer.dart';
 import 'internal/render_liquid_glass_geometry.dart';
 import 'internal/transform_tracking_repaint_boundary_mixin.dart';
@@ -9,7 +12,6 @@ import 'liquid_glass.dart';
 import 'liquid_glass_render_scope.dart';
 import 'rendering/liquid_glass_render_object.dart';
 import 'shaders.dart';
-import 'package:meta/meta.dart';
 
 /// A widget that groups multiple liquid glass shapes for blending.
 ///
@@ -186,7 +188,6 @@ class _RawLiquidGlassBlendGroup extends SingleChildRenderObjectWidget {
 }
 
 @visibleForTesting
-@internal
 class RenderLiquidGlassBlendGroup extends RenderLiquidGlassGeometry
     with TransformTrackingRenderObjectMixin {
   RenderLiquidGlassBlendGroup({
@@ -248,11 +249,16 @@ class RenderLiquidGlassBlendGroup extends RenderLiquidGlassGeometry
     LiquidGlassSettings settings,
     double devicePixelRatio,
   ) {
+    // The baseline visual thickness was tuned on a 3x Retina display.
+    // To maintain this exact logical thickness on all screens, we multiply by (DPR / 3.0).
+    // This scales the physical rim width so it always occupies the same logical space.
+    final scale = devicePixelRatio / 3.0;
+
     geometryShader.setFloatUniforms(initialIndex: 2, (value) {
       value.setFloats([
         settings.effectiveRefractiveIndex,
         settings.effectiveChromaticAberration,
-        settings.effectiveThickness,
+        settings.effectiveThickness * scale,
         blend * devicePixelRatio,
       ]);
     });
@@ -406,7 +412,6 @@ class RenderLiquidGlassBlendGroup extends RenderLiquidGlassGeometry
 /// A link that connects liquid glass shapes to their parent
 /// [LiquidGlassBlendGroup] for efficient communication of position, size, and
 /// transform changes.
-@internal
 class GlassGroupLink with ChangeNotifier {
   /// Creates a new [GlassGroupLink].
   GlassGroupLink();

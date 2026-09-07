@@ -1,14 +1,14 @@
 import 'package:flutter/cupertino.dart';
 
-/// Configuration for the morphing search bar in [GlassSearchableBottomBar].
+/// Configuration for the morphing search bar in [GlassTabBar.searchable].
 ///
 /// When the user taps the collapsed search pill, [onSearchToggle] is called
-/// with `true`. Set [GlassSearchableBottomBar.isSearchActive] to `true` to
+/// with `true`. Set `isSearchActive` to `true` to
 /// expand the search bar and collapse the tab pill.
 ///
 /// ## Example
 /// ```dart
-/// GlassSearchableBottomBar(
+/// GlassTabBar.searchable(
 ///   tabs: [...],
 ///   selectedIndex: _tab,
 ///   onTabSelected: (i) => setState(() => _tab = i),
@@ -46,6 +46,7 @@ class GlassSearchBarConfig {
     this.onTapOutside,
     this.autoFocusOnExpand = false,
     this.expandWhenActive = true,
+    this.showPill = true,
     this.showsCancelButton = true,
     this.cancelButtonColor,
     this.cancelIcon,
@@ -63,7 +64,7 @@ class GlassSearchBarConfig {
 
   /// Width of the collapsed tab pill when search is active.
   ///
-  /// If omitted, defaults to matching the [GlassSearchableBottomBar.searchBarHeight]
+  /// If omitted, defaults to matching the `searchBarHeight`
   /// to ensure the collapsed indicator perfectly shrinks proportionately into a circle.
   final double? collapsedTabWidth;
 
@@ -72,8 +73,8 @@ class GlassSearchBarConfig {
   /// Optional builder for a custom logo/icon shown on the collapsed tab pill
   /// when search is fully active.
   ///
-  /// If omitted, this defaults to displaying the [activeIcon] (or fallback
-  /// [icon]) of the currently selected [GlassBottomBarTab], matching the native
+  /// If omitted, this defaults to displaying the [GlassTab.activeIcon] (or fallback
+  /// [GlassTab.icon]) of the currently selected [GlassTab], matching the native
   /// iOS Apple News behavior.
   final WidgetBuilder? collapsedLogoBuilder;
 
@@ -248,6 +249,21 @@ class GlassSearchBarConfig {
   /// search pill to remain a compact circular button on the right side when
   /// active, creating an empty gap in the center of the bar.
   final bool expandWhenActive;
+
+  /// Whether the compact search pill exists on the bar.
+  ///
+  /// Defaults to `true` — the pill is present in both states, the original
+  /// layout. `false` removes it entirely: the tab pill takes over the
+  /// reclaimed width, and the pill is genuinely absent rather than
+  /// invisible — it contributes no glass shape to the blend layer, so
+  /// nothing fuses with the tab pill's trailing edge.
+  ///
+  /// The value may change at runtime: the pill spring-scales in and out in
+  /// place at its slot, on the same spring the pill morphs use. That is the
+  /// building block for app-driven policies — a bar that wants the pill
+  /// only while search is active simply flips this together with
+  /// `isSearchActive`.
+  final bool showPill;
 
   /// Whether to show a cancel/dismiss button when the search bar is focused.
   ///

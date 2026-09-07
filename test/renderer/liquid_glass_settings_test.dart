@@ -384,10 +384,12 @@ void main() {
         expect(a, isNot(equals(b)));
       });
 
-      test('props contains both whiten fields', () {
-        const s = LiquidGlassSettings(whitenStrength: 0.4, whitenGated: false);
-        expect(s.props, contains(0.4));
-        expect(s.props, contains(false));
+      test('hashCode includes both whiten fields', () {
+        const s1 = LiquidGlassSettings(whitenStrength: 0.4, whitenGated: false);
+        const s2 = LiquidGlassSettings(whitenStrength: 0.4, whitenGated: false);
+        const s3 = LiquidGlassSettings(whitenStrength: 0.4, whitenGated: true);
+        expect(s1.hashCode, equals(s2.hashCode));
+        expect(s1.hashCode, isNot(equals(s3.hashCode)));
       });
     });
 
@@ -436,9 +438,12 @@ void main() {
         expect(a, isNot(equals(c)));
       });
 
-      test('props contains backerColor', () {
-        const s = LiquidGlassSettings(backerColor: Color(0x59000000));
-        expect(s.props, contains(const Color(0x59000000)));
+      test('hashCode includes backerColor', () {
+        const a = LiquidGlassSettings(backerColor: Color(0x59000000));
+        const b = LiquidGlassSettings(backerColor: Color(0x59000000));
+        const c = LiquidGlassSettings();
+        expect(a.hashCode, equals(b.hashCode));
+        expect(a.hashCode, isNot(equals(c.hashCode)));
       });
     });
   });

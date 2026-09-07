@@ -10,10 +10,14 @@
 analyzer:
   errors:
     unintended_html_in_doc_comment: ignore
-    # invalid_internal_annotation fires on vendored renderer code where @internal
-    # is used correctly (public classes in lib/src/) but our analyzer version
-    # is stricter than the upstream package's.
-    invalid_internal_annotation: ignore
+  exclude:
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 include: package:flutter_lints/flutter.yaml
 
 linter:
@@ -28,6 +32,7 @@ linter:
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
   rules:
+    public_member_api_docs: true
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
 

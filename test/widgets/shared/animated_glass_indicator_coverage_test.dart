@@ -149,6 +149,43 @@ void main() {
       expect(glass.settings.backerColor, backer);
     });
 
+    testWidgets('non-default edgeAbsorption survives onto the built glass',
+        (tester) async {
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.5,
+        settings: const LiquidGlassSettings(edgeAbsorption: 0.25),
+      )));
+      await tester.pump();
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.edgeAbsorption, 0.25);
+    });
+
+    testWidgets('non-default fresnelStrength survives onto the built glass',
+        (tester) async {
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.5,
+        settings: const LiquidGlassSettings(fresnelStrength: 0.6),
+      )));
+      await tester.pump();
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.fresnelStrength, 0.6);
+    });
+
+    testWidgets(
+        'non-default platformViewFallbackColor survives onto the built glass',
+        (tester) async {
+      const fallback = Color(0x80333333);
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.5,
+        settings: const LiquidGlassSettings(
+          platformViewFallbackColor: fallback,
+        ),
+      )));
+      await tester.pump();
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.platformViewFallbackColor, fallback);
+    });
+
     testWidgets('non-default thickness exercises thickness branch',
         (tester) async {
       await tester.pumpWidget(_wrap(_make(
@@ -378,10 +415,13 @@ void main() {
   // ── baseIndicatorSettings public constant ────────────────────────────────
 
   group('AnimatedGlassIndicator.baseIndicatorSettings', () {
-    test('chromaticAberration is the iOS 26 iridescent value (0.15)', () {
+    test('chromaticAberration is 0.0 (rainbow rim artifact removed)', () {
+      // chromaticAberration was changed from 0.15 → 0.0 to eliminate the
+      // rainbow rim artefact on the indicator pill. The lens distortion from
+      // glass surface normals is preserved — only colour dispersion is removed.
       expect(
         AnimatedGlassIndicator.baseIndicatorSettings.chromaticAberration,
-        closeTo(0.15, 1e-10),
+        closeTo(0.0, 1e-10),
       );
     });
 

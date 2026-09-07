@@ -1,6 +1,4 @@
-// Copyright 2013 The Flutter Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file.
+// ignore_for_file: public_member_api_docs
 
 import 'dart:ui' as ui;
 
@@ -8,10 +6,46 @@ import 'package:flutter/widgets.dart';
 
 /// A callback used by [MultiShaderBuilder].
 typedef MultiShaderBuilderCallback = Widget Function(
-  BuildContext,
-  List<ui.FragmentShader>,
-  Widget?,
+  BuildContext context,
+  List<ui.FragmentShader> shaders,
+  Widget? child,
 );
+
+/// A callback used by [ShaderBuilder].
+typedef ShaderBuilderCallback = Widget Function(
+  BuildContext context,
+  ui.FragmentShader shader,
+  Widget? child,
+);
+
+/// A widget that loads and caches a single [ui.FragmentProgram] based on an [assetKey].
+class ShaderBuilder extends StatelessWidget {
+  /// Create a new [ShaderBuilder].
+  const ShaderBuilder(
+    this.builder, {
+    required this.assetKey,
+    super.key,
+    this.child,
+  });
+
+  /// The asset key used to lookup the shader.
+  final String assetKey;
+
+  /// The child widget to pass through to the [builder], optional.
+  final Widget? child;
+
+  /// The builder that provides access to the [ui.FragmentShader].
+  final ShaderBuilderCallback builder;
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiShaderBuilder(
+      (context, shaders, child) => builder(context, shaders.first, child),
+      assetKeys: [assetKey],
+      child: child,
+    );
+  }
+}
 
 /// A widget that loads and caches [ui.FragmentProgram]s based on asset keys.
 ///
@@ -95,6 +129,19 @@ class MultiShaderBuilder extends StatefulWidget {
       assetKeys.map(precacheShader),
     );
   }
+
+  /// Returns the cached [ui.FragmentProgram] for [assetKey], or `null` if it
+  /// has not been precached yet.
+  ///
+  /// This is an internal accessor used by the pipeline warm-up path in
+  /// [LiquidGlassWidgets.initialize] to reuse already-compiled program objects
+  /// rather than loading them a second time from the asset bundle.
+  ///
+  /// Must only be called after [precacheShaders] has completed for the
+  /// requested [assetKey].
+  // ignore: library_private_types_in_public_api
+  static ui.FragmentProgram? cachedProgram(String assetKey) =>
+      _MultiShaderBuilderState._shaderCache[assetKey];
 }
 
 class _MultiShaderBuilderState extends State<MultiShaderBuilder> {

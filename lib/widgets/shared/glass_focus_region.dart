@@ -47,6 +47,7 @@ class GlassFocusRegion extends StatefulWidget {
     this.semanticLabel,
     this.isButton = false,
     this.isSlider = false,
+    this.tracksSelection = false,
     this.isSelected = false,
     this.toggled,
     this.onKeyboardActivate,
@@ -83,6 +84,7 @@ class GlassFocusRegion extends StatefulWidget {
         semanticLabel = null,
         isButton = false,
         isSlider = false,
+        tracksSelection = false,
         isSelected = false,
         toggled = null,
         onKeyboardActivate = null,
@@ -140,7 +142,16 @@ class GlassFocusRegion extends StatefulWidget {
   /// Whether this is a slider for screen readers.
   final bool isSlider;
 
-  /// Whether this item is currently selected (e.g. tab or segmented control).
+  /// Whether this region participates in a mutual exclusivity group (like a
+  /// segmented control).
+  ///
+  /// When true, unselected states emit `hasSelectedState: true` (with `selected: false`)
+  /// so screen readers announce "not selected", making it clear this is a selectable
+  /// option among others. When false (e.g. for standard buttons), unselected
+  /// states omit the selected trait entirely to avoid confusing announcements.
+  final bool tracksSelection;
+
+  /// Whether the widget is currently selected (if it supports selection).
   final bool isSelected;
 
   /// The toggled state (for switches). If null, this semantic is not applied.
@@ -356,7 +367,11 @@ class _GlassFocusRegionState extends State<GlassFocusRegion> {
       // Only set `selected` when this region tracks selection state.
       // Passing `selected: false` unconditionally emits `hasSelectedState`
       // which breaks semantics checks on plain buttons (GlassButton, GlassChip).
-      selected: widget.isSelected ? true : null,
+      // However, segmented controls MUST emit `hasSelectedState` even when unselected
+      // so users know it's a selectable option.
+      selected: widget.tracksSelection
+          ? widget.isSelected
+          : (widget.isSelected ? true : null),
       toggled: widget.toggled,
       label: widget.semanticLabel,
       value: widget.semanticValue,

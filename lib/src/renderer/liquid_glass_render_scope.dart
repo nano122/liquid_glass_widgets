@@ -1,8 +1,8 @@
+// ignore_for_file: public_member_api_docs
+
 import 'package:flutter/widgets.dart';
 import 'liquid_glass_renderer.dart';
-import 'package:meta/meta.dart';
 
-@internal
 class LiquidGlassRenderScope extends InheritedWidget {
   /// Creates a new [LiquidGlassRenderScope].
   const LiquidGlassRenderScope({

@@ -1,3 +1,5 @@
+import 'package:liquid_glass_widgets/src/renderer/liquid_glass_renderer.dart';
+import 'package:liquid_glass_widgets/src/renderer/stretch.dart';
 import 'package:liquid_glass_widgets/widgets/interactive/glass_icon_button.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -114,17 +116,10 @@ void main() {
         ),
       );
 
-      final sizedBox = tester.widget<SizedBox>(
-        find
-            .descendant(
-              of: find.byType(GlassIconButton),
-              matching: find.byType(SizedBox),
-            )
-            .first,
-      );
+      final size = tester.getSize(find.byType(GlassIconButton));
 
-      expect(sizedBox.width, equals(customSize));
-      expect(sizedBox.height, equals(customSize));
+      expect(size.width, equals(customSize));
+      expect(size.height, equals(customSize));
     });
 
     testWidgets('has proper semantics', (tester) async {
@@ -179,6 +174,64 @@ void main() {
       expect(button.useOwnLayer, isFalse);
       expect(button.quality, isNull);
       expect(button.interactionScale, equals(0.95));
+      expect(button.anchorStretchSettings, isNull);
+    });
+  });
+
+  // ── interaction resolution ────────────────────────────────────────────────
+  // GlassIconButton always uses a fixed factor (0.95 shrink), never the native
+  // point-based sizing path. These tests pin that contract so a future change
+  // to the delegation in build() is caught immediately.
+  group('GlassIconButton interaction resolution', () {
+    /// The LiquidStretch the icon button delegates to via GlassButton.
+    LiquidStretch stretchOf(WidgetTester tester) =>
+        tester.widget<LiquidStretch>(
+          find.descendant(
+            of: find.byType(GlassIconButton),
+            matching: find.byType(LiquidStretch),
+          ),
+        );
+
+    testWidgets('always uses a fixed factor — never the native sizing path',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassIconButton(
+              icon: const Icon(Icons.star),
+              onPressed: () {},
+            ),
+          ),
+        ),
+      );
+
+      final stretch = stretchOf(tester);
+      // A fixed 0.95 factor: pressGrowth must be null so the button shrinks
+      // uniformly rather than inflating by a point-growth amount.
+      expect(stretch.interactionScale, equals(0.95));
+      expect(stretch.pressGrowth, isNull,
+          reason:
+              'GlassIconButton must never use the native point-sizing path');
+    });
+
+    testWidgets('forwards explicit anchorStretchSettings to GlassButton',
+        (tester) async {
+      const settings = AnchorStretchSettings(intensity: 0.5);
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassIconButton(
+              icon: const Icon(Icons.star),
+              onPressed: () {},
+              anchorStretchSettings: settings,
+            ),
+          ),
+        ),
+      );
+
+      expect(stretchOf(tester).anchorStretchSettings.intensity, equals(0.5));
     });
   });
 }

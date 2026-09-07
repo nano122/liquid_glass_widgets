@@ -361,8 +361,10 @@ class _GlassSliderState extends State<GlassSlider>
 
     // Calculate normalized position (0-1)
     final trackWidth = constraints.maxWidth - (widget.thumbRadius * 2);
-    final normalizedX =
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final rawNormalizedX =
         ((localPosition.dx - widget.thumbRadius) / trackWidth).clamp(0.0, 1.0);
+    final normalizedX = isRtl ? 1.0 - rawNormalizedX : rawNormalizedX;
 
     // Feed the spring controller with the new normalised position.
     // Its velocity property produces smooth, spring-based values that
@@ -450,9 +452,10 @@ class _GlassSliderState extends State<GlassSlider>
 
     return LayoutBuilder(
       builder: (context, constraints) {
+        final isRtl = Directionality.of(context) == TextDirection.rtl;
         final trackWidth = constraints.maxWidth - (widget.thumbRadius * 2);
-        final thumbPosition =
-            widget.thumbRadius + (trackWidth * normalizedValue);
+        final thumbPosition = widget.thumbRadius +
+            (trackWidth * (isRtl ? 1.0 - normalizedValue : normalizedValue));
 
         final step = (widget.max - widget.min) / (widget.divisions ?? 10);
         final increasedValue =
@@ -531,23 +534,34 @@ class _GlassSliderState extends State<GlassSlider>
                               // Active track
                               if (normalizedValue > 0)
                                 Positioned(
-                                  left: 0,
-                                  right: constraints.maxWidth *
-                                      (1 - normalizedValue),
+                                  left: isRtl
+                                      ? constraints.maxWidth *
+                                          (1 - normalizedValue)
+                                      : 0,
+                                  right: isRtl
+                                      ? 0
+                                      : constraints.maxWidth *
+                                          (1 - normalizedValue),
                                   top: 0,
                                   bottom: 0,
                                   child: Container(
                                     decoration: BoxDecoration(
                                       color: activeColor,
                                       borderRadius: BorderRadius.horizontal(
-                                        left: Radius.circular(
-                                          widget.trackHeight / 2,
-                                        ),
-                                        right: normalizedValue >= 1.0
+                                        left: isRtl
+                                            ? (normalizedValue >= 1.0
+                                                ? Radius.circular(
+                                                    widget.trackHeight / 2)
+                                                : Radius.zero)
+                                            : Radius.circular(
+                                                widget.trackHeight / 2),
+                                        right: isRtl
                                             ? Radius.circular(
-                                                widget.trackHeight / 2,
-                                              )
-                                            : Radius.zero,
+                                                widget.trackHeight / 2)
+                                            : (normalizedValue >= 1.0
+                                                ? Radius.circular(
+                                                    widget.trackHeight / 2)
+                                                : Radius.zero),
                                       ),
                                     ),
                                   ),

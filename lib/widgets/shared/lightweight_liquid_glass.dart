@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+import '../../src/renderer/internal/transform_tracking_repaint_boundary_mixin.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 import '../../src/renderer/glass_backdrop_kernel.dart';
 import '../../theme/glass_theme.dart';
@@ -126,8 +127,22 @@ class LightweightLiquidGlass extends StatefulWidget {
   // On web: Each widget needs its own instance (CanvasKit requirement)
   static ui.FragmentShader? _sharedShader; // Native only
 
-  // Dummy 1x1 transparent image for when no background is captured
+  // Dummy 1x1 transparent image for when no background is captured.
+  // Lazily allocated on first paint to guarantee zero GPU raster work
+  // during preWarm() or initialize() before runApp().
   static ui.Image? _dummyImage;
+
+  /// Returns the cached 1×1 transparent dummy image, creating it lazily on demand.
+  static ui.Image get dummyImage => _dummyImage ??= _createDummyImage();
+
+  static ui.Image _createDummyImage() {
+    final recorder = ui.PictureRecorder();
+    ui.Canvas(recorder);
+    final picture = recorder.endRecording();
+    final image = picture.toImageSync(1, 1);
+    picture.dispose();
+    return image;
+  }
 
   /// Resets static shader state for testing. Call between tests to ensure
   /// each test gets the fallback rendering (no cached shader).
@@ -155,11 +170,6 @@ class LightweightLiquidGlass extends StatefulWidget {
         // Fallback for unit tests where package prefix may not be resolved
         program = await ui.FragmentProgram.fromAsset(testPath);
       }
-      // Allocate the dummy image only after program load succeeds — avoids
-      // leaking a GPU allocation when the shader fails to compile.
-      final recorder = ui.PictureRecorder();
-      ui.Canvas(recorder);
-      _dummyImage = recorder.endRecording().toImageSync(1, 1);
       _cachedProgram = program;
 
       // On native platforms, create the shared shader instance
@@ -589,7 +599,8 @@ class _LightweightGlassEffect extends SingleChildRenderObjectWidget {
   }
 }
 
-class _RenderLightweightGlass extends RenderProxyBox {
+class _RenderLightweightGlass extends RenderProxyBox
+    with TransformTrackingRenderObjectMixin {
   _RenderLightweightGlass({
     required ui.FragmentShader? shader,
     required LiquidGlassSettings settings,
@@ -613,6 +624,11 @@ class _RenderLightweightGlass extends RenderProxyBox {
         _backgroundKey = backgroundKey,
         _cachedLightCos = math.cos(settings.lightAngle),
         _cachedLightSin = -math.sin(settings.lightAngle);
+
+  @override
+  void onTransformChanged() {
+    markNeedsPaint();
+  }
 
   ui.FragmentShader? _shader;
   ui.FragmentShader? get shader => _shader;
@@ -824,10 +840,10 @@ class _RenderLightweightGlass extends RenderProxyBox {
         _backgroundImage!,
         filterQuality: FilterQuality.medium, // coverage:ignore-line
       );
-    } else if (LightweightLiquidGlass._dummyImage != null) {
+    } else {
       _shader!.setImageSampler(
         0,
-        LightweightLiquidGlass._dummyImage!,
+        LightweightLiquidGlass.dummyImage,
         filterQuality: FilterQuality.medium, // coverage:ignore-line
       );
     }
@@ -870,7 +886,7 @@ class _RenderLightweightGlass extends RenderProxyBox {
     // apply. The gain calibrates the veil so a single whitenStrength value
     // reads close to the Premium path's gated whiten at the same value.
     final double whitenStrength =
-        _settings.whitenStrength.clamp(0.0, 1.0).toDouble();
+        _settings.effectiveWhitenStrength.clamp(0.0, 1.0).toDouble();
     const double kWhitenVeilGain = 1.5;
     final double whitenVeil =
         (whitenStrength * kWhitenVeilGain).clamp(0.0, 1.0).toDouble();
@@ -1005,5 +1021,14 @@ class _RenderLightweightGlass extends RenderProxyBox {
     shader.setFloat(index++, bgOrigin.dy);
     shader.setFloat(index++, bgSize.width);
     shader.setFloat(index++, bgSize.height);
+
+    // 32: uEdgeAbsorption — Beer-Lambert meniscus rim darkening [0..1].
+    // Passed directly — what the caller sets is what the shader gets.
+    shader.setFloat(index++, _settings.edgeAbsorption.clamp(0.0, 1.0));
+
+    // 33: uFresnelStrength — grazing-angle Fresnel rim scale [0..∞].
+    // Matches the uniform wired in liquid_glass_final_render.frag via uEdgeConfig.y.
+    // Default 1.0 = calibrated iOS 26 baseline (0.10 * adaptiveStrength in shader).
+    shader.setFloat(index++, _settings.fresnelStrength.clamp(0.0, 4.0));
   }
 }

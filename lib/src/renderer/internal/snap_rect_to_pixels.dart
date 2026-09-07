@@ -1,7 +1,7 @@
-import 'package:flutter/rendering.dart';
-import 'package:meta/meta.dart';
+// ignore_for_file: public_member_api_docs
 
-@internal
+import 'package:flutter/rendering.dart';
+
 extension SnapRectToPixels on Rect {
   Rect snapToPixels(double devicePixelRatio) {
     return Rect.fromLTRB(

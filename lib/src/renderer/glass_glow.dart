@@ -1,8 +1,9 @@
+// ignore_for_file: public_member_api_docs
+
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
-import 'package:meta/meta.dart';
 import '../../utils/glass_spring.dart';
 
 /// {@template glass_glow}
@@ -230,15 +231,12 @@ class GlassGlowLayer extends StatefulWidget {
   @override
   State<GlassGlowLayer> createState() => GlassGlowLayerState();
 
-  @internal
-  // ignore: public_member_api_docs
   static GlassGlowLayerState? maybeOf(BuildContext context) {
     if (!context.mounted) return null;
     return context.findAncestorStateOfType<GlassGlowLayerState>();
   }
 }
 
-@internal
 class GlassGlowLayerState extends State<GlassGlowLayer>
     with TickerProviderStateMixin {
   late final _offsetController = OffsetSpringController(
@@ -425,12 +423,66 @@ class _RenderGlassGlowLayer extends RenderProxyBox {
         _pulse = pulse,
         _clipper = clipper;
 
+  // ---------------------------------------------------------------------------
+  // Clipper — path caching + proper shouldReclip / ChangeNotifier wiring.
+  //
+  // Follows the Flutter engine's RenderCustomClip pattern:
+  //   • The computed Path is cached keyed on size, so the
+  //     superellipse/oval getOuterPath() construction runs at most once per
+  //     layout change, not once per paint frame (120 x/s on ProMotion).
+  //   • shouldReclip is respected so value-equal clippers don't invalidate.
+  //   • addListener/removeListener wires dynamic clippers that notify on
+  //     parameter change (e.g. a morph-animated clipper in GlassButtonGroup).
+  // ---------------------------------------------------------------------------
   CustomClipper<Path>? _clipper;
   CustomClipper<Path>? get clipper => _clipper;
   set clipper(CustomClipper<Path>? value) {
     if (_clipper == value) return;
+    final oldClipper = _clipper;
     _clipper = value;
+    if (value == null) {
+      _markNeedsClip();
+    } else if (oldClipper == null ||
+        oldClipper.runtimeType != value.runtimeType ||
+        value.shouldReclip(oldClipper)) {
+      _markNeedsClip();
+    }
+    if (attached) {
+      oldClipper?.removeListener(_markNeedsClip);
+      value?.addListener(_markNeedsClip);
+    }
+  }
+
+  Path? _cachedClipPath;
+  Size? _cachedClipSize;
+
+  void _markNeedsClip() {
+    _cachedClipPath = null;
+    _cachedClipSize = null;
     markNeedsPaint();
+  }
+
+  /// Returns the clip [Path] for [size], reusing the cached instance when
+  /// [size] is unchanged. Eliminates redundant [getOuterPath] calls (and the
+  /// associated native [Path] construction) on every animation frame.
+  Path _getClipPath(Size size) {
+    if (_cachedClipPath == null || _cachedClipSize != size) {
+      _cachedClipPath = _clipper!.getClip(size);
+      _cachedClipSize = size;
+    }
+    return _cachedClipPath!;
+  }
+
+  @override
+  void attach(PipelineOwner owner) {
+    super.attach(owner);
+    _clipper?.addListener(_markNeedsClip);
+  }
+
+  @override
+  void detach() {
+    _clipper?.removeListener(_markNeedsClip);
+    super.detach();
   }
 
   double _pulse;
@@ -487,6 +539,14 @@ class _RenderGlassGlowLayer extends RenderProxyBox {
     super.paint(context, offset);
 
     final canvas = context.canvas;
+    final bool hasClipper = _clipper != null;
+
+    // For both drawing operations we translate the canvas to the render
+    // object's local origin before clipping and drawing. This means:
+    //   • _getClipPath returns a path in [0,0,width,height] — no .shift() needed.
+    //   • drawRect / drawCircle arguments live in local space.
+    // The net effect: 0 Path allocations per frame during the spring animation
+    // (previously 2 per frame: getClip() construction + .shift() clone).
 
     // 2. Global Specular Pulse (full-window additive highlight, driven by GlassModalSheet
     //    saturation controller during high-velocity drag interactions).
@@ -496,10 +556,11 @@ class _RenderGlassGlowLayer extends RenderProxyBox {
         ..color = CupertinoColors.white.withValues(alpha: 0.08 * _pulse)
         ..blendMode = BlendMode.plus;
 
-      if (_clipper != null) {
+      if (hasClipper) {
         canvas.save();
-        canvas.clipPath(_clipper!.getClip(size).shift(offset));
-        canvas.drawRect(offset & size, pulsePaint);
+        canvas.translate(offset.dx, offset.dy);
+        canvas.clipPath(_getClipPath(size));
+        canvas.drawRect(Offset.zero & size, pulsePaint);
         canvas.restore();
       } else {
         canvas.drawRect(offset & size, pulsePaint);
@@ -508,9 +569,9 @@ class _RenderGlassGlowLayer extends RenderProxyBox {
 
     // 3. Local Interactive Glow (finger glare — radial gradient following the touch point)
     if (_glowColor.a > 0 && _glowRadius > 0) {
-      final glowPosition = offset + _glowOffset;
-      // Use the shortest side so that wide pills don't generate massive glow
-      // spilling vertically off the surface.
+      // _glowOffset is in local layer coordinates: _handlePointer converts the
+      // raw pointer position from GlassGlow-local → global → GlassGlowLayer-local
+      // before calling updateTouch(), so no further adjustment is needed here.
       final shortSide = math.min(size.width, size.height);
       final radius = _glowRadius * shortSide + _glowSpreadRadius * shortSide;
 
@@ -521,7 +582,7 @@ class _RenderGlassGlowLayer extends RenderProxyBox {
         ..shader = RadialGradient(
           colors: [_glowColor, _glowColor.withValues(alpha: 0)],
           stops: const [0.0, 1.0],
-        ).createShader(Rect.fromCircle(center: glowPosition, radius: radius))
+        ).createShader(Rect.fromCircle(center: _glowOffset, radius: radius))
         ..blendMode = BlendMode.plus;
 
       // Optional Gaussian blur to soften the glow halo. Only create the
@@ -530,14 +591,15 @@ class _RenderGlassGlowLayer extends RenderProxyBox {
         paint.maskFilter = MaskFilter.blur(BlurStyle.normal, _glowBlurRadius);
       }
 
-      // 2. Additive light over geometry boundary only
-      if (_clipper != null) {
+      // Additive specular light, clipped to the glass geometry boundary.
+      if (hasClipper) {
         canvas.save();
-        canvas.clipPath(_clipper!.getClip(size).shift(offset));
-        canvas.drawCircle(glowPosition, radius, paint);
+        canvas.translate(offset.dx, offset.dy);
+        canvas.clipPath(_getClipPath(size));
+        canvas.drawCircle(_glowOffset, radius, paint);
         canvas.restore();
       } else {
-        canvas.drawCircle(glowPosition, radius, paint);
+        canvas.drawCircle(offset + _glowOffset, radius, paint);
       }
     }
   }

@@ -1,15 +1,15 @@
-import 'dart:ui';
+// ignore_for_file: public_member_api_docs
 
-import 'package:equatable/equatable.dart';
+import 'dart:ui';
+import 'package:flutter/foundation.dart';
+
 import 'package:flutter/rendering.dart';
-import 'package:flutter_shaders/flutter_shaders.dart';
 import '../liquid_glass_renderer.dart';
+import 'fragment_shader_extensions.dart';
 import 'snap_rect_to_pixels.dart';
 import '../liquid_glass.dart';
 import '../liquid_glass_blend_group.dart';
-import '../logging.dart';
 import '../rendering/liquid_glass_render_object.dart';
-import 'package:meta/meta.dart';
 
 /// The state of liquid glass geometry, used to determine if it needs to be
 /// updated.
@@ -35,7 +35,6 @@ enum LiquidGlassGeometryState {
 /// This will paint to the screen normally, but use a [GlassGroupLink] to gather
 /// shape information and generate a geometry matte using the provided
 /// [geometryShader].
-@internal
 abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
   /// Creates a new [RenderLiquidGlassGeometry] with the given
   /// [geometryShader].
@@ -49,9 +48,6 @@ abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
         _devicePixelRatio = devicePixelRatio {
     updateShaderWithSettings(settings, devicePixelRatio);
   }
-
-  /// The logger for liquid glass geometry.
-  final Logger logger = Logger(LgrLogNames.geometry);
 
   /// The shader that generates the geometry matte.
   final FragmentShader geometryShader;
@@ -67,7 +63,6 @@ abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
     if (_settings == value) return;
 
     if (value.requiresGeometryRebuild(_settings)) {
-      logger.finer('$hashCode rebuild ');
       markGeometryNeedsUpdate(force: true);
     }
 
@@ -205,7 +200,6 @@ abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
     if (geometryState == LiquidGlassGeometryState.mightNeedUpdate &&
         !anyShapeChangedInLayer &&
         geometry != null) {
-      logger.finer('$hashCode Skipping geometry rebuild.');
       renderLink?.notifyGeometryChanged(this);
 
       // Only render once we are done building
@@ -213,8 +207,6 @@ abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
       geometryState = LiquidGlassGeometryState.updated;
       return geometry;
     }
-
-    logger.finer('$hashCode Rebuilding geometry');
 
     geometry?.dispose();
     geometry = null;
@@ -295,7 +287,6 @@ abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
 }
 
 @immutable
-@internal
 sealed class GeometryCache {
   const GeometryCache({
     required this.matteBounds,
@@ -335,7 +326,6 @@ sealed class GeometryCache {
 /// Represents a current snapshot of the geometry used for liquid glass
 /// rendering.
 @immutable
-@internal
 class UnrenderedGeometryCache extends GeometryCache {
   const UnrenderedGeometryCache({
     required this.matte,
@@ -440,7 +430,6 @@ class UnrenderedGeometryCache extends GeometryCache {
 /// Represents a current snapshot of the geometry used for liquid glass
 /// rendering.
 @immutable
-@internal
 class RenderedGeometryCache extends GeometryCache {
   const RenderedGeometryCache({
     required this.matte,
@@ -479,7 +468,6 @@ extension on LiquidGlassSettings {
   }
 }
 
-@internal
 enum RawShapeType {
   // none(0), unused in CPU code
   squircle(1),
@@ -510,8 +498,7 @@ enum RawShapeType {
 ///
 /// Can be part of multiple blended shapes in [RenderLiquidGlassGeometry], or on
 /// its own.
-@internal
-class ShapeGeometry extends Equatable {
+class ShapeGeometry {
   ShapeGeometry({
     required this.renderObject,
     required this.shape,
@@ -580,10 +567,21 @@ class ShapeGeometry extends Equatable {
   final Matrix4? shapeToGeometry;
 
   @override
-  List<Object?> get props => [
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other.runtimeType != runtimeType) return false;
+    return other is ShapeGeometry &&
+        other.renderObject == renderObject &&
+        other.shape == shape &&
+        other.glassContainsChild == glassContainsChild &&
+        other.shapeBounds == shapeBounds;
+  }
+
+  @override
+  int get hashCode => Object.hash(
         renderObject,
         shape,
         glassContainsChild,
         shapeBounds,
-      ];
+      );
 }

@@ -5,7 +5,9 @@ import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
 
 void main() {
   group('GlassScrollEdgeEffect', () {
-    testWidgets('renders children and overlays', (tester) async {
+    testWidgets(
+        'renders children and DecoratedBox overlays by default (soft style)',
+        (tester) async {
       await tester.pumpWidget(
         CupertinoApp(
           home: Center(
@@ -15,7 +17,6 @@ void main() {
               child: GlassScrollEdgeEffect(
                 topFadeHeight: 100,
                 bottomFadeHeight: 60,
-                // Use a non-scrollable child to prevent scrollbar widgets from messing up counts
                 child: const SizedBox(key: Key('child')),
               ),
             ),
@@ -27,14 +28,12 @@ void main() {
       expect(find.byKey(const Key('child')), findsOneWidget);
 
       final effectFinder = find.byType(GlassScrollEdgeEffect);
-
-      // Verify the two fade overlays are created
       final decoratedBoxes = tester.widgetList<DecoratedBox>(
         find.descendant(of: effectFinder, matching: find.byType(DecoratedBox)),
       );
       expect(decoratedBoxes.length, 2);
 
-      // Verify they are positioned correctly
+      // Verify positioning
       final positionedWidgets = tester.widgetList<Positioned>(
         find.descendant(of: effectFinder, matching: find.byType(Positioned)),
       );
@@ -45,6 +44,48 @@ void main() {
 
       expect(topOverlay.height, 100);
       expect(bottomOverlay.height, 60);
+    });
+
+    testWidgets('renders ProgressiveBlur overlays when using blur style',
+        (tester) async {
+      await tester.pumpWidget(
+        CupertinoApp(
+          home: Center(
+            child: SizedBox(
+              height: 500,
+              width: 300,
+              child: GlassScrollEdgeEffect(
+                topFadeHeight: 100,
+                bottomFadeHeight: 60,
+                style: GlassScrollEdgeStyle.blur,
+                maxSigma: 24,
+                child: const SizedBox(key: Key('child')),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.byKey(const Key('child')), findsOneWidget);
+
+      final effectFinder = find.byType(GlassScrollEdgeEffect);
+      final blurs = tester.widgetList<ProgressiveBlur>(
+        find.descendant(
+            of: effectFinder, matching: find.byType(ProgressiveBlur)),
+      );
+      expect(blurs.length, 2);
+
+      final topBlur = blurs.firstWhere(
+        (b) => b.direction == ProgressiveBlurDirection.topToBottom,
+      );
+      final bottomBlur = blurs.firstWhere(
+        (b) => b.direction == ProgressiveBlurDirection.bottomToTop,
+      );
+
+      expect(topBlur.maxSigma, 24);
+      expect(bottomBlur.maxSigma, 24);
+      expect(topBlur.falloff, 2.0);
+      expect(bottomBlur.falloff, 2.0);
     });
 
     testWidgets('respects fadeTop and fadeBottom flags', (tester) async {
@@ -116,10 +157,11 @@ void main() {
       expect(topOverlay.height, 50);
     });
 
-    testWidgets('uses provided fadeColor', (tester) async {
+    testWidgets('uses provided fadeColor for soft style', (tester) async {
       await tester.pumpWidget(
         CupertinoApp(
           home: GlassScrollEdgeEffect(
+            style: GlassScrollEdgeStyle.soft,
             fadeColor: const Color(0xFFFF0000),
             child: const SizedBox(),
           ),
@@ -138,7 +180,8 @@ void main() {
       expect(linearGradient.colors.first.b, 0.0);
     });
 
-    testWidgets('attempts background capture within LiquidGlassScope',
+    testWidgets(
+        'attempts background capture within LiquidGlassScope when using soft style',
         (tester) async {
       await tester.pumpWidget(
         CupertinoApp(
@@ -153,6 +196,7 @@ void main() {
                         child: ColoredBox(color: Colors.red)),
                   ),
                   GlassScrollEdgeEffect(
+                    style: GlassScrollEdgeStyle.soft,
                     child: const SizedBox(),
                   ),
                 ],

@@ -92,7 +92,7 @@ class GlassButtonGroupItem {
 
   /// The icon widget to display.
   ///
-  /// Typically a [CupertinoIcon] or [Icon]. The parent [GlassButtonGroup]
+  /// Typically an [Icon] or [CupertinoIcons] icon widget. The parent [GlassButtonGroup]
   /// wraps this in an [IconTheme] that sets size and color based on the
   /// current brightness.
   final Widget icon;

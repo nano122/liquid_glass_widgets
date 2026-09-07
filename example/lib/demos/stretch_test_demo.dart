@@ -58,17 +58,7 @@ class _StretchDemoPageState extends State<StretchTestDemo> {
         ),
       ),
       child: GlassScaffold(
-        appBar: GlassAppBar(
-          leading: GlassButton(
-            quality: GlassQuality.premium,
-            icon: Icon(CupertinoIcons.back),
-            onTap: () => Navigator.of(context).pop(),
-            width: 40,
-            height: 40,
-            iconSize: 20,
-            useOwnLayer: true,
-          ),
-        ),
+        appBar: const GlassAppBar.pinned(),
         body: GlassScrollEdgeEffect(
           topFadeHeight: MediaQuery.paddingOf(context).top + 44 + 40,
           fadeBottom: false,

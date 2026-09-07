@@ -1,9 +1,10 @@
+// ignore_for_file: public_member_api_docs
+
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart';
-import 'package:meta/meta.dart';
 
-@internal
 mixin TransformTrackingRepaintBoundaryMixin on RenderProxyBox {
   @override
   GeometryTransformTrackingLayer? get layer =>
@@ -40,7 +41,6 @@ mixin TransformTrackingRepaintBoundaryMixin on RenderProxyBox {
   void onTransformChanged();
 }
 
-@internal
 mixin TransformTrackingRenderObjectMixin on RenderProxyBox {
   @override
   GeometryTransformTrackingLayer? get layer =>
@@ -75,7 +75,6 @@ mixin TransformTrackingRenderObjectMixin on RenderProxyBox {
   void onTransformChanged();
 }
 
-@internal
 class GeometryTransformTrackingLayer extends OffsetLayer {
   GeometryTransformTrackingLayer();
 
@@ -88,9 +87,20 @@ class GeometryTransformTrackingLayer extends OffsetLayer {
 
   @override
   void addToScene(ui.SceneBuilder builder) {
-    final currentTransform = renderObject?.getTransformTo(null);
+    if (renderObject == null || !renderObject!.attached) return;
+    Matrix4? currentTransform;
+    try {
+      currentTransform = renderObject!.getTransformTo(null);
+    } catch (_) {
+      return;
+    }
     if (!MatrixUtils.matrixEquals(currentTransform, _lastTransform)) {
-      onTransformChanged?.call();
+      // Don't trigger onTransformChanged on the very first frame (when _lastTransform is null).
+      // The render object just painted itself, so it is already up to date. Triggering it
+      // here would needlessly dirty the render tree and force a second frame to render.
+      if (_lastTransform != null) {
+        onTransformChanged?.call();
+      }
       _lastTransform = currentTransform;
     }
   }

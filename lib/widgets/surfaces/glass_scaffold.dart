@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/services.dart';
 
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/widgets/surfaces/dynamic_preferred_size.dart';
 import '../../types/glass_quality.dart';
 import '../../theme/glass_theme_data.dart';
 import '../shared/glass_content_aware_scope.dart';
@@ -128,6 +129,7 @@ class GlassScaffold extends StatelessWidget {
     this.topEdgeFadeExtent = 20.0,
     this.bottomEdgeFadeExtent = 20.0,
     this.edgeStyle = GlassScrollEdgeStyle.soft,
+    this.maxSigma = 18.0,
     this.extendBody = true,
     this.appBarHeight = 44.0,
     this.bottomBarHeight,
@@ -166,7 +168,7 @@ class GlassScaffold extends StatelessWidget {
 
   /// An optional bottom bar placed at the bottom, always above the body.
   ///
-  /// Typically a [GlassBottomBar], [GlassSearchableBottomBar], or any widget.
+  /// Typically a [GlassTabBar.bottom], [GlassTabBar.searchable], or any widget.
   /// When provided, bottom edge fading is auto-calculated to cover the bar
   /// area plus safe zone.
   final Widget? bottomBar;
@@ -186,10 +188,19 @@ class GlassScaffold extends StatelessWidget {
   /// background: Container(color: myColor)
   /// ```
   /// When both [background] and [backgroundColor] are provided, [background]
-  /// takes precedence.
+  /// takes precedence and [backgroundColor] has no effect as a solid fill.
   ///
-  /// When neither is set the Scaffold inherits [Theme.scaffoldBackgroundColor]
-  /// as normal — the inner Scaffold is **not** forced transparent.
+  /// **Scroll edge fade colour:** [backgroundColor] is also used as the target
+  /// colour for the `GlassScrollEdgeEffect` overlay (the fade at the top/bottom
+  /// of the body). When `background` is set, this is its *only* visible role.
+  /// If left null the fade defaults to `CupertinoTheme.scaffoldBackgroundColor`
+  /// (near-black in dark mode), which can produce an unexpected dark wash.
+  /// Set this explicitly whenever you use a `background` widget and the edge
+  /// fade colour matters.
+  ///
+  /// When neither [background] nor [backgroundColor] is set the Scaffold
+  /// inherits `Theme.scaffoldBackgroundColor` as normal — the inner Scaffold
+  /// is **not** forced transparent.
   final Color? backgroundColor;
 
   /// Glass settings for the page's rendering layer. See [GlassPage.settings].
@@ -230,16 +241,42 @@ class GlassScaffold extends StatelessWidget {
   ///
   /// The total top fade height = safe area top + [appBarHeight] +
   /// [topEdgeFadeExtent]. Defaults to 20.0.
+  ///
+  /// Negative values (e.g. `-20.0`) are valid and retract the fade boundary
+  /// inside the app bar area — especially useful with [GlassScrollEdgeStyle.blur]
+  /// to keep content sharp until it passes directly beneath the bar.
   final double topEdgeFadeExtent;
 
   /// Extra fade height beyond the auto-calculated bottom bar area.
   ///
   /// The total bottom fade height = [bottomBarHeight] + safe area bottom +
   /// [bottomEdgeFadeExtent]. Defaults to 20.0.
+  ///
+  /// Negative values (e.g. `-20.0` or `-30.0`) are valid and retract the fade
+  /// boundary inside the bottom bar area — ideal for floating tab bars and
+  /// [GlassScrollEdgeStyle.blur] so content stays 100% sharp until it is
+  /// physically beneath the glass capsule.
   final double bottomEdgeFadeExtent;
 
-  /// The edge fade style. See [GlassScrollEdgeStyle].
+  /// The edge fade style applied at the top and bottom of the scroll body.
+  /// See [GlassScrollEdgeStyle].
+  ///
+  /// Defaults to [GlassScrollEdgeStyle.soft], which matches iOS 26's
+  /// `.scrollEdgeEffectStyle(.soft)` — a diffused gradient fade.
+  ///
+  /// Set to [GlassScrollEdgeStyle.blur] for a stronger hardware-accelerated
+  /// progressive Gaussian frost. This is a design enhancement beyond the
+  /// iOS 26 system default — opt in explicitly when you want a more aggressive
+  /// frosted-glass edge look. Note it adds a [BackdropFilterLayer] per edge.
+  ///
+  /// Set to [GlassScrollEdgeStyle.hard] for a crisp cutoff, matching iOS 26's
+  /// `.scrollEdgeEffectStyle(.hard)`.
   final GlassScrollEdgeStyle edgeStyle;
+
+  /// Maximum blur sigma for [GlassScrollEdgeStyle.blur].
+  ///
+  /// Defaults to 18.0.
+  final double maxSigma;
 
   // ===========================================================================
   // Layout
@@ -263,7 +300,7 @@ class GlassScaffold extends StatelessWidget {
   /// The preferred height of the app bar, used for padding calculations.
   ///
   /// When [appBar] is a [PreferredSizeWidget], this value is overridden by
-  /// [PreferredSizeWidget.preferredSize.height]. Defaults to 44.0.
+  /// [PreferredSizeWidget], this value is overridden by `preferredSize.height`. Defaults to 44.0.
   final double appBarHeight;
 
   /// The height of the bottom bar, used for padding calculations.
@@ -294,7 +331,7 @@ class GlassScaffold extends StatelessWidget {
   ///       child: PlayBarPill(),
   ///     ),
   ///   ],
-  ///   bottomBar: GlassSearchableBottomBar(...),
+  ///   bottomBar: GlassTabBar.searchable(...),
   ///   body: scrollContent,
   /// )
   /// ```
@@ -347,7 +384,7 @@ class GlassScaffold extends StatelessWidget {
   /// ```dart
   /// GlassScaffold(
   ///   contentAwareBrightness: true,
-  ///   bottomBar: GlassBottomBar(
+  ///   bottomBar: GlassTabBar.bottom(
   ///     adaptiveBrightness: true,
   ///     ...
   ///   ),
@@ -362,6 +399,26 @@ class GlassScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Some bars change height from their own internal state — a tab bar
+    // minimizing on scroll — without the widget instance being replaced.
+    // Their preferredSize is read below, so the scaffold has to know when it
+    // has changed; nothing else would mark this build dirty.
+    //
+    // Only build() re-runs. `body` is the same Widget instance every time, so
+    // the element for the app's content is re-parented rather than rebuilt.
+    final bar = bottomBar;
+    final barResize =
+        bar is GlassDynamicPreferredSize ? bar.preferredSizeListenable : null;
+    if (barResize != null) {
+      return ListenableBuilder(
+        listenable: barResize,
+        builder: _buildContent,
+      );
+    }
+    return _buildContent(context, null);
+  }
+
+  Widget _buildContent(BuildContext context, Widget? _) {
     final mediaQuery = MediaQuery.of(context);
     final topPad = mediaQuery.padding.top;
     final botPad = mediaQuery.padding.bottom;
@@ -372,8 +429,9 @@ class GlassScaffold extends StatelessWidget {
     final effectiveAppBarHeight = appBar is PreferredSizeWidget
         ? (appBar! as PreferredSizeWidget).preferredSize.height
         : appBarHeight;
-    final effectiveBottomBarHeight =
-        bottomBar != null ? (bottomBarHeight ?? 60.0) : 0.0;
+    final effectiveBottomBarHeight = bottomBar is PreferredSizeWidget
+        ? (bottomBar as PreferredSizeWidget).preferredSize.height
+        : (bottomBar != null ? (bottomBarHeight ?? 60.0) : 0.0);
 
     // Resolve edge fade toggles.
     final doFadeTop = topEdgeFade ?? (edgeFade && appBar != null);
@@ -399,6 +457,7 @@ class GlassScaffold extends StatelessWidget {
         fadeTop: doFadeTop,
         fadeBottom: doFadeBottom,
         style: edgeStyle,
+        maxSigma: maxSigma,
         // Pass the explicit background colour so the async-capture fallback
         // gradient uses the correct colour in dark mode instead of defaulting
         // to CupertinoTheme.scaffoldBackgroundColor (which is near-black).

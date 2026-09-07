@@ -372,4 +372,19 @@ void main() {
       expect(adapter.currentQuality, GlassQuality.minimal);
     });
   });
+
+  // ── Static probe platform behavior ────────────────────────────────────────
+
+  group('static probe platform behavior', () {
+    test('static probe runs on start when skipStaticProbeForTesting is false',
+        () {
+      GlassQualityAdapter.skipStaticProbeForTesting = false;
+      addTearDown(() => GlassQualityAdapter.skipStaticProbeForTesting = true);
+
+      final adapter = _make(max: GlassQuality.premium);
+      adapter.start();
+      expect(adapter.currentQuality, isNot(GlassQuality.premium));
+      adapter.stop();
+    });
+  });
 }

@@ -63,8 +63,11 @@ The bound texture is the **whole backdrop** (the screen), not the bar's own
 rectangle, so `uSize` is the screen size. To make the gradient run across the
 *bar* rather than the whole screen, the widget passes its own device-pixel
 rectangle (`uRegionOriginPx` / `uRegionSizePx`) into the shader and normalises
-the gradient over that. The GLES backend captures the backdrop y-flipped, which
-the shader corrects under `IMPELLER_TARGET_OPENGLES`.
+the gradient over that. On Flutter 3.44/3.45 the GLES backend captured the
+backdrop y-flipped, which the shader corrects under `LGR_GLES_FLIP_SAMPLE_Y`
+(see `shaders/gles_compat.glsl`). Flutter 3.46+ stores render-to-texture content
+top-down on every backend, so the correction is compiled out there — applying it
+anyway is what caused #201.
 
 ## Usage
 

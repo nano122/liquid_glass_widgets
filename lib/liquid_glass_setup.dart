@@ -1,14 +1,14 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'theme/glass_theme.dart';
 import 'theme/glass_theme_data.dart';
 import 'types/glass_quality.dart';
 import 'utils/accessibility_config.dart' as glass_config;
+import 'utils/glass_brightness.dart' show glassExternalBrightnessResolver;
 import 'utils/glass_performance_monitor.dart';
 import 'src/renderer/liquid_glass_renderer.dart';
 import 'src/renderer/shaders.dart';
+
 import 'src/renderer/internal/multi_shader_builder.dart';
 import 'widgets/shared/glass_adaptive_scope.dart';
 import 'widgets/shared/glass_effect.dart';
@@ -52,16 +52,6 @@ class LiquidGlassWidgets {
       glass_config.respectSystemAccessibility;
   static set respectSystemAccessibility(bool value) =>
       glass_config.respectSystemAccessibility = value;
-
-  /// Deprecated — use [respectSystemAccessibility] instead.
-  ///
-  /// Retained for discoverability (the two-word form reads naturally as a
-  /// boolean predicate). Will be removed in v1.0.
-  @Deprecated('Use respectSystemAccessibility instead.')
-  static bool get respectsAccessibility => respectSystemAccessibility;
-  @Deprecated('Use respectSystemAccessibility instead.')
-  static set respectsAccessibility(bool value) =>
-      respectSystemAccessibility = value;
 
   /// Global [LiquidGlassSettings] override for the entire application.
   ///
@@ -110,46 +100,56 @@ class LiquidGlassWidgets {
   /// | `interactive_indicator.frag` | Custom refraction effect |
   /// | `liquid_glass_geometry_blended.frag` | Geometry / SDF pass |
   /// | `liquid_glass_final_render.frag` | Final composite pass |
-  /// | `progressive_blur.frag` | Graduated backdrop blur ([ProgressiveBlur]) |
+  /// Controls shader preloading and warm-up behaviour during [initialize].
   static Future<void> initialize({
     bool enablePerformanceMonitor = true,
+    GlassWarmUpMode warmUpMode = GlassWarmUpMode.auto,
   }) async {
     debugPrint('[LiquidGlass] Initializing library...');
 
-    // 1. Pre-warm shader programs in parallel — prevents first-frame jank /
-    //    "white flash" when glass widgets first appear.
-    //
-    //    Only shader disk-loads are awaited here (the only work that MUST
-    //    complete before runApp, since a missing program causes a white flash).
-    //
-    //    The Impeller pipeline warm-up is scheduled post-first-frame instead —
-    //    the splash screen or first non-glass frame provides enough GPU idle
-    //    time for pipeline compilation without blocking runApp.
-    await Future.wait([
+    // 1. Pre-warm shader programs in parallel — fast, async disk I/O only.
+    // Loads FragmentProgram objects into RAM so widgets render without
+    // placeholder frames / white flash.
+    final precacheFutures = <Future<void>>[
       LightweightLiquidGlass.preWarm(),
       GlassEffect.preWarm(),
-      MultiShaderBuilder.precacheShaders([
-        ShaderKeys.blendedGeometry,
-        ShaderKeys.liquidGlassRender,
-      ]),
-      // ProgressiveBlur's graduated-blur shader — warmed here too so consumers
-      // never need a separate preload call (it degrades to a uniform blur if the
-      // shader can't load, so this never throws).
       ProgressiveBlur.preload(),
-    ]);
+    ];
 
-    // 2. Schedule Impeller pipeline warm-up after the first frame — zero
-    //    startup cost. The first non-glass frame (e.g. splash screen) provides
-    //    ample idle GPU time for the driver to compile the Vulkan pipeline.
-    WidgetsBinding.instance
-        .addPostFrameCallback((_) => _warmUpImpellerPipeline());
+    // On platforms that support premium glass rendering (iOS Metal, macOS Metal,
+    // Android Vulkan/GLES), preload the multi-pass shaders as well.
+    // Web, Windows, and Linux skip premium preload by default as they are
+    // capped at standard quality by the GlassAdaptiveScope static probe.
+    final bool shouldPreloadPremium = warmUpMode == GlassWarmUpMode.always ||
+        (warmUpMode == GlassWarmUpMode.auto && !_shouldSkipPremiumPreload());
 
-    // 3. Register the debug performance monitor (no-op in release builds).
+    if (shouldPreloadPremium) {
+      precacheFutures.add(
+        MultiShaderBuilder.precacheShaders([
+          ShaderKeys.blendedGeometry,
+          ShaderKeys.liquidGlassRender,
+        ]),
+      );
+    }
+
+    await Future.wait(precacheFutures);
+
+    // 2. Register the debug performance monitor (no-op in release builds).
     if (enablePerformanceMonitor && !kReleaseMode) {
       GlassPerformanceMonitor.start();
     }
 
     debugPrint('[LiquidGlass] Initialization complete.');
+  }
+
+  /// Returns `true` if the current platform is statically capped at standard
+  /// quality by [GlassAdaptiveScope] and does not need multi-pass premium shaders
+  /// preloaded during startup.
+  static bool _shouldSkipPremiumPreload() {
+    if (kIsWeb) return true;
+    if (defaultTargetPlatform == TargetPlatform.windows) return true;
+    if (defaultTargetPlatform == TargetPlatform.linux) return true;
+    return false;
   }
 
   // ── wrap() ─────────────────────────────────────────────────────────────────
@@ -240,9 +240,33 @@ class LiquidGlassWidgets {
     bool respectSystemAccessibility = true,
     bool adaptiveQuality = false,
     GlassAdaptiveScopeConfig? adaptiveConfig,
+
+    /// Optional brightness resolver for MaterialApp integration.
+    ///
+    /// When using `MaterialApp`, pass `Theme.maybeBrightnessOf` here so glass
+    /// widgets correctly honour `ThemeMode.light` / `.dark` / `.system` even
+    /// when the device OS and the app theme disagree:
+    ///
+    /// ```dart
+    /// runApp(LiquidGlassWidgets.wrap(
+    ///   child: const MyApp(),
+    ///   brightnessResolver: Theme.maybeBrightnessOf,
+    /// ));
+    /// ```
+    ///
+    /// This package has zero `flutter/material.dart` imports (required for the
+    /// `cupertino_ui` split). The callback pattern lets you bridge Material's
+    /// `ThemeMode` into the glass brightness cascade without coupling the
+    /// package to Material. `CupertinoApp` users can omit this parameter.
+    Brightness? Function(BuildContext)? brightnessResolver,
   }) {
     // Apply global accessibility preference.
     glass_config.respectSystemAccessibility = respectSystemAccessibility;
+
+    // Register the optional Material brightness resolver.
+    // This lets MaterialApp users pass Theme.maybeBrightnessOf without this
+    // package needing to import flutter/material.dart.
+    glassExternalBrightnessResolver = brightnessResolver;
 
     Widget result = child;
 
@@ -278,42 +302,18 @@ class LiquidGlassWidgets {
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
+}
 
-  /// Warms up the Impeller rendering pipeline for glass effects.
-  ///
-  /// Instantiates a minimal [LiquidGlassLayer] to trigger Impeller pipeline
-  /// compilation — eliminating first-frame jank when glass effects appear.
-  /// Skipped on Skia / Web where Impeller is not active.
-  ///
-  /// Called via [addPostFrameCallback] from [initialize], so it runs after
-  /// the first frame rather than blocking [runApp]. The first non-glass frame
-  /// (splash screen, loading state) provides natural GPU idle time for driver
-  /// pipeline compilation without any artificial delay.
-  static void _warmUpImpellerPipeline() {
-    if (!ui.ImageFilter.isShaderFilterSupported) {
-      debugPrint('[LiquidGlass] Skipping Impeller warm-up (Skia/Web detected)');
-      return;
-    }
+/// Controls shader preloading and warm-up behaviour during [LiquidGlassWidgets.initialize].
+enum GlassWarmUpMode {
+  /// Automatic selection: preloads all shaders on iOS, macOS, and Android (including Vulkan),
+  /// while skipping unused premium multi-pass shaders on Web, Windows, and Linux
+  /// where quality is statically capped at standard.
+  auto,
 
-    try {
-      const warmUpSettings = LiquidGlassSettings(
-        blur: 3,
-        thickness: 30,
-        refractiveIndex: 1.5,
-      );
+  /// Force preloading of all shaders on all platforms.
+  always,
 
-      // Instantiating the layer registers the shader programs with the
-      // Impeller engine and kicks off async driver pipeline compilation.
-      // No artificial delay needed — the post-frame scheduling ensures the
-      // engine is in a stable state to accept the compilation work.
-      final _ = LiquidGlassLayer(
-        settings: warmUpSettings,
-        child: const SizedBox.shrink(),
-      );
-
-      debugPrint('[LiquidGlass] ✓ Impeller pipeline warm-up scheduled');
-    } catch (e) {
-      debugPrint('[LiquidGlass] Impeller warm-up failed (non-critical): $e');
-    }
-  }
+  /// Skip preloading heavy multi-pass shaders, loading them on demand when rendered.
+  never,
 }
