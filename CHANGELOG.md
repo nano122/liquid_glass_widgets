@@ -1,3 +1,14 @@
+# 1.3.0+poiesis.1
+
+## Poiesis fork
+
+- 将旧 fork 以可追溯的 merge commit 升级到官方 `v1.3.0`，保留上游完整历史。
+- 保留 Poiesis 的共享 Impeller 根层、Shader/滤镜缓存、解析圆角 SDF、完整仿射几何、零模糊折射、无玻璃外投影、定制边缘处理和质量上限 Scope。
+- 将上游 v1.3.0 的 PlatformView 透传状态迁移到 float slot 44，避开 Poiesis 在 slots 32–43 使用的解析几何参数。
+- 同步保留上游 v1.3.0 的原生按压反馈、零分配 glow 绘制和路由退出时的变换追踪修复。
+
+---
+
 # 1.3.0
 
 ## Bug Fixes

@@ -381,13 +381,17 @@ class GlassAdaptiveScopeConfig {
 /// 因此绝不会把用户选择的省电档抬高；移除或提高本层上限后，子树立即恢复外层
 /// 档位，适合动画生命周期内的确定性降载。
 class GlassQualityCeilingScope extends StatelessWidget {
+  /// 创建一个只限制最高质量、不启动性能采样器的固定作用域。
   const GlassQualityCeilingScope({
     required this.maxQuality,
     required this.child,
     super.key,
   });
 
+  /// 子树允许使用的最高玻璃质量。
   final GlassQuality maxQuality;
+
+  /// 应用质量上限的子树。
   final Widget child;
 
   @override

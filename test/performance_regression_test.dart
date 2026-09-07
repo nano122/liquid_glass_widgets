@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
@@ -181,6 +182,36 @@ void main() {
     expect(renderObject.geometryNeedsUpdateForTesting, isFalse);
     renderObject.dispose();
     shader.dispose();
+  });
+
+  test('PlatformView uniform 必须位于解析几何 uniform 之后', () {
+    final shaderSource = File(
+      'shaders/liquid_glass_final_render.frag',
+    ).readAsStringSync();
+    final renderObjectSource = File(
+      'lib/src/renderer/rendering/liquid_glass_render_object.dart',
+    ).readAsStringSync();
+
+    // 中文注释：Poiesis 使用 32–43 共十二个 float 保存解析圆角与完整逆仿射，
+    // 而上游 v1.3.0 新增了 PlatformView 模式。两者必须严格分离，否则写入
+    // PlatformView 状态会覆盖几何矩阵，表现为旋转/斜切玻璃边缘随机错位。
+    final analyticDeclaration = shaderSource.indexOf(
+      'uniform vec4 uAnalyticRect;',
+    );
+    final platformViewDeclaration = shaderSource.indexOf(
+      'uniform float uPlatformViewMode;',
+    );
+    expect(analyticDeclaration, greaterThanOrEqualTo(0));
+    expect(platformViewDeclaration, greaterThan(analyticDeclaration));
+
+    // 中文注释：普通绘制与捕获绘制都会复用 FragmentShader，所以两条路径
+    // 都必须从 slot 44 显式写入，不能依赖上一帧残留的 uniform 值。
+    expect(
+      RegExp(r'setFloatUniforms\(initialIndex: 44').allMatches(
+        renderObjectSource,
+      ),
+      hasLength(2),
+    );
   });
 }
 

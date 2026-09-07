@@ -3,17 +3,16 @@
 ## 上游基线
 
 - 包名：`liquid_glass_widgets`
-- 官方稳定版：`0.30.2`
-- pub.dev 发布时间：2026-08-21 07:43:37 UTC
+- 官方稳定版：`1.3.0`
+- 官方 tag commit：`3482b728fbab125da90f766b4f386e3707be4f3f`
+- pub.dev 发布时间：2026-09-04 02:59:04 UTC
 - 官方仓库：<https://github.com/sdegenaar/liquid_glass_widgets>
-- 发布包 SHA-256：`6eb319af884c7269403089873dfe7a2d948cbbf384b856ea3518d4a187aa5314`
+- Poiesis fork：<https://github.com/nano122/liquid_glass_widgets>
+- 发布包 SHA-256：`f9a93694ec2c4607f5adb7140f648cda176aaf943cfbec552c5c416342f828de`
 
-本目录由官方 pub.dev 发布包导入，而不是从开发机 Pub Cache 直接运行；这样
-Poiesis 的补丁、Shader 和测试都能随仓库版本化。
-
-官方发布包没有携带 `example/pubspec.yaml` 中声明的大体积示例图片，因此本地
-`analysis_options.yaml` 排除 `example/**`；可交付的 `lib/**` 与新增 `test/**`
-仍由完整 `flutter analyze` 覆盖，不使用错误级别降级隐藏核心告警。
+当前版本从旧 Poiesis fork 的 `main` 以 merge commit 合入官方 `v1.3.0`，再
+语义迁移 Poiesis 补丁；没有压平历史或强制覆盖分支。Poiesis 主项目通过 Git
+submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版本化。
 
 ## Poiesis 补丁
 
@@ -125,6 +124,10 @@ Poiesis 的补丁、Shader 和测试都能随仓库版本化。
      为数百毫秒的动画重复注册帧耗时回调或启动 180 帧基准测试；
    - 与外层质量取更低档，用户已选择 Minimal/Standard 时绝不被局部 Scope 升档；
    - Scope 更新或移除后立即恢复外层档位，不修改会话缓存与用户持久化偏好。
+10. 完整保留官方 v1.3.0 的原生按压反馈、零分配 glow 绘制、路由退出时的
+    变换追踪修复和 PlatformView 透传模式；其中 PlatformView 的 float uniform
+    固定在 slot 44，避开 Poiesis 解析几何占用的 slots 32–43。普通绘制与捕获
+    绘制都会显式写入该值，避免复用 FragmentShader 时继承上一帧状态。
 
 ## 回退边界
 
@@ -138,6 +141,8 @@ Poiesis 的补丁、Shader 和测试都能随仓库版本化。
 
 ## 更新上游
 
-升级时先从 pub.dev 校验最新版与发布包 SHA-256，再把新版放入临时目录，按
-`POIESIS_FORK.md` 的补丁清单逐项重放和运行测试；不要直接覆盖本目录，也不要
-修改 `%LOCALAPPDATA%\Pub\Cache`。
+升级时先从 pub.dev 校验最新版与发布包 SHA-256，在 Poiesis fork 中配置官方
+仓库为 `upstream`，用 merge commit 合入目标 tag，再按本文件的补丁清单逐项
+语义迁移并运行测试。测试通过后快进推送 fork 的 `main`，最后在 Poiesis 主
+项目中更新 submodule 指针；不要直接覆盖目录，也不要修改
+`%LOCALAPPDATA%\Pub\Cache`。

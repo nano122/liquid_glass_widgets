@@ -81,8 +81,7 @@ Finder findShadowDecoratedBox() => find.byWidgetPredicate((widget) {
 
 void main() {
   group('SearchPill — light-mode shadow guard', () {
-    testWidgets('collapsed pill renders shadow in light mode with elevation',
-        (tester) async {
+    testWidgets('Poiesis 的 collapsed pill 在亮色模式也不绘制外投影', (tester) async {
       await tester.pumpWidget(
         _lightApp(
           Center(
@@ -107,8 +106,7 @@ void main() {
       );
       await tester.pump();
 
-      // Shadow DecoratedBox should be present in light mode with elevation.
-      expect(findShadowDecoratedBox(), findsWidgets);
+      expect(findShadowDecoratedBox(), findsNothing);
     });
 
     testWidgets('collapsed pill skips shadow in dark mode', (tester) async {
@@ -172,8 +170,7 @@ void main() {
       expect(findShadowDecoratedBox(), findsNothing);
     });
 
-    testWidgets('expanded pill renders shadow in light mode with elevation',
-        (tester) async {
+    testWidgets('Poiesis 的 expanded pill 在亮色模式也不绘制外投影', (tester) async {
       await tester.pumpWidget(
         _lightApp(
           Center(
@@ -198,8 +195,7 @@ void main() {
       );
       await tester.pump();
 
-      // Shadow should be present for expanded state too.
-      expect(findShadowDecoratedBox(), findsWidgets);
+      expect(findShadowDecoratedBox(), findsNothing);
     });
 
     testWidgets('expanded pill skips shadow in dark mode', (tester) async {
@@ -231,7 +227,7 @@ void main() {
       expect(findShadowDecoratedBox(), findsNothing);
     });
 
-    testWidgets('shadow layer is wrapped with IgnorePointer', (tester) async {
+    testWidgets('Poiesis 不为交互胶囊创建空的 shadow layer', (tester) async {
       await tester.pumpWidget(
         _lightApp(
           Center(
@@ -256,19 +252,9 @@ void main() {
       );
       await tester.pump();
 
-      // The shadow DecoratedBox must be wrapped with IgnorePointer so it
-      // doesn't intercept taps.
-      final shadowBox = findShadowDecoratedBox();
-      expect(shadowBox, findsWidgets);
-
-      // Find the IgnorePointer ancestor of the first shadow box.
-      expect(
-        find.ancestor(
-          of: shadowBox.first,
-          matching: find.byType(IgnorePointer),
-        ),
-        findsWidgets,
-      );
+      // 中文说明：策略关闭后应连空的阴影包装节点也省掉，而不是只把 alpha
+      // 设为零；这样不会留下多余合成层或命中测试包装。
+      expect(findShadowDecoratedBox(), findsNothing);
     });
   });
 
@@ -419,8 +405,7 @@ void main() {
   // ===========================================================================
 
   group('AdaptiveGlass — light-mode shadow guard', () {
-    testWidgets('own-layer renders shadow DecoratedBox in light mode',
-        (tester) async {
+    testWidgets('Poiesis 的 own-layer 在亮色模式也不绘制外投影', (tester) async {
       await tester.pumpWidget(
         _lightApp(
           Center(
@@ -440,7 +425,7 @@ void main() {
       );
       await tester.pump();
 
-      expect(findShadowDecoratedBox(), findsWidgets);
+      expect(findShadowDecoratedBox(), findsNothing);
     });
 
     testWidgets('own-layer skips shadow in dark mode', (tester) async {
@@ -492,13 +477,9 @@ void main() {
       expect(findShadowDecoratedBox(), findsNothing);
     });
 
-    testWidgets(
-        'grouped path in minimal quality still renders shadow (frosted fallback)',
-        (tester) async {
-      // In minimal quality, both grouped and own-layer paths go through
-      // the same _FrostedFallback + _wrapWithLightModeShadow. The
-      // "skip shadow for grouped" rule only applies to the premium
-      // (Impeller) path where metaball blending requires no wrappers.
+    testWidgets('Poiesis 在 minimal grouped 回退路径也关闭玻璃外投影', (tester) async {
+      // 中文说明：Poiesis 的无外投影策略覆盖所有质量档位和显式 shadow，
+      // minimal 回退不能重新引入 DecoratedBox 阴影层。
       await tester.pumpWidget(
         _lightApp(
           Center(
@@ -519,10 +500,7 @@ void main() {
       );
       await tester.pump();
 
-      // Minimal quality grouped path uses _FrostedFallback which DOES
-      // wrap with shadow — this is correct since minimal never uses
-      // the LiquidGlassLayer blend group.
-      expect(findShadowDecoratedBox(), findsWidgets);
+      expect(findShadowDecoratedBox(), findsNothing);
     });
 
     // NOTE: Premium grouped path (LiquidGlass.grouped) skips
@@ -545,34 +523,24 @@ void main() {
       expect(GlassShadow.scaled(-1.0), isEmpty);
     });
 
-    test('elevation 1.0 returns defaults (2 shadows)', () {
-      final shadows = GlassShadow.scaled(1.0);
-      expect(shadows.length, 2);
-      expect(shadows, equals(GlassShadow.defaults));
+    test('Poiesis 在 elevation 1.0 时仍返回空列表', () {
+      expect(GlassShadow.scaled(1.0), isEmpty);
     });
 
-    test('elevation 2.0 returns scaled shadows', () {
-      final shadows = GlassShadow.scaled(2.0);
-      expect(shadows.length, 2);
-      // Blur should be doubled
-      expect(shadows[0].blurRadius, equals(16.0)); // 8 * 2
-      expect(shadows[1].blurRadius, equals(4.0)); // 2 * 2
-      // Offset should be doubled
-      expect(shadows[0].offset, equals(const Offset(0, 4.0))); // 2 * 2
-      expect(shadows[1].offset, equals(const Offset(0, 2.0))); // 1 * 2
+    test('Poiesis 在更高 elevation 时也不创建外投影', () {
+      expect(GlassShadow.scaled(2.0), isEmpty);
     });
 
-    test('effectiveShadow returns shadow when set explicitly', () {
+    test('Poiesis 会拦截显式传入的 shadow', () {
       const settings = LiquidGlassSettings(
         shadow: [BoxShadow(color: Color(0xFF000000), blurRadius: 10)],
       );
-      expect(settings.effectiveShadow.length, 1);
-      expect(settings.effectiveShadow[0].blurRadius, 10);
+      expect(settings.effectiveShadow, isEmpty);
     });
 
-    test('effectiveShadow falls back to scaled when shadow is null', () {
+    test('Poiesis 不会从 shadowElevation 回退创建外投影', () {
       const settings = LiquidGlassSettings(shadowElevation: 1.0);
-      expect(settings.effectiveShadow, equals(GlassShadow.defaults));
+      expect(settings.effectiveShadow, isEmpty);
     });
 
     test('effectiveShadow returns empty when elevation is 0 and shadow is null',

@@ -21,6 +21,10 @@ Bring Apple's iOS 26 Liquid Glass to your Flutter app — real shader-based blur
 
 </div>
 
+> **Poiesis fork:** 当前分支基于官方 `v1.3.0`，版本为
+> `1.3.0+poiesis.1`。Poiesis 的渲染定制、对应测试和后续同步流程记录在
+> [POIESIS_FORK.md](POIESIS_FORK.md)；通用 API 与用法继续遵循下方官方文档。
+
 
 ## Installation
 

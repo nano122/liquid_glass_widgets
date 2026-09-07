@@ -1,9 +1,8 @@
-// AnimatedGlassIndicator: outer drop shadow on the moving glass jelly.
+// AnimatedGlassIndicator：移动玻璃 jelly 的外投影回归测试。
 //
-// The shadow paints only when the caller EXPLICITLY sets a non-default
-// shadowElevation (or a shadow list) in the indicator settings, only in
-// light mode (package-wide shadow convention), and only while the glass
-// pass is mounted. Existing indicators must render without it.
+// Poiesis 的视觉规范明确禁止玻璃组件产生外投影。即使上游允许调用方显式
+// 传入 shadowElevation 或 shadow，这里也必须在所有亮度与动画状态下拦截，
+// 避免升级上游版本时重新引入与应用设计不一致的悬浮阴影。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -50,18 +49,16 @@ AnimatedGlassIndicator _make({
 
 void main() {
   group('AnimatedGlassIndicator — jelly outer shadow', () {
-    testWidgets('explicit shadowElevation paints the shadow in light mode',
-        (tester) async {
+    testWidgets('Poiesis 在亮色模式拦截显式 shadowElevation', (tester) async {
       await tester.pumpWidget(_wrap(
         _make(settings: const LiquidGlassSettings(shadowElevation: 3.0)),
         brightness: Brightness.light,
       ));
       await tester.pump();
-      expect(_outerShadowPaint(), findsOneWidget);
+      expect(_outerShadowPaint(), findsNothing);
     });
 
-    testWidgets('explicit shadow list paints the shadow in light mode',
-        (tester) async {
+    testWidgets('Poiesis 在亮色模式拦截显式 shadow 列表', (tester) async {
       await tester.pumpWidget(_wrap(
         _make(
           settings: const LiquidGlassSettings(shadow: [
@@ -72,7 +69,7 @@ void main() {
         brightness: Brightness.light,
       ));
       await tester.pump();
-      expect(_outerShadowPaint(), findsOneWidget);
+      expect(_outerShadowPaint(), findsNothing);
     });
 
     testWidgets('default settings paint NO shadow (back-compat)',

@@ -4,7 +4,13 @@ import 'dart:ui' as ui;
 ///
 /// Standard 一直使用 Rec.709，而 Minimal 的旧实现实际使用 BT.601。
 /// 无损阶段保留这个差异，避免统一实现时悄悄改变任一档位的色彩。
-enum GlassSaturationProfile { rec709, bt601 }
+enum GlassSaturationProfile {
+  /// Standard / Premium 使用的 Rec.709 亮度权重。
+  rec709,
+
+  /// Minimal 历史路径使用的 BT.601 亮度权重。
+  bt601,
+}
 
 /// Standard 与 Minimal 共用的背景滤镜构造器。
 ///
