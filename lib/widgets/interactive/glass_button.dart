@@ -944,12 +944,13 @@ class _GlassButtonState extends State<GlassButton>
     // - Premium + no stretch (stretch == 0): kept. No scaling means no
     //   artefacts, and the boundary gives a pure performance win for the
     //   expensive Impeller pipeline.
-    // - Standard: always kept. The lightweight shader re-executes at the
-    //   correct resolution even inside a RepaintBoundary.
+    // - Standard: skipped when stretched as well. On Impeller it now shares
+    //   the native full glass layer with Premium, so scaling a cached texture
+    //   would have the same edge artefacts; on Skia/Web this remains harmless.
 
     final bool hasStretch = widget.stretch > 0;
     final bool skipBoundary = effectiveQuality == GlassQuality.minimal ||
-        (effectiveQuality == GlassQuality.premium && hasStretch);
+        hasStretch;
 
     final stretchContent = LiquidStretch(
       // A fixed factor when one is given; otherwise the native sizing.

@@ -7,6 +7,11 @@
 // Fully original implementation.
 
 #include <flutter/runtime_effect.glsl>
+// 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
+// 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
+// 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
+  // POIESIS_EDGE_TREATMENT_ADLER32: c288c981
+#include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
 precision highp float;
@@ -35,6 +40,9 @@ uniform float uEdgeAbsorption;
 // 33: uFresnelStrength — scales the grazing-angle Fresnel rim brightening [0..∞].
 // Default 1.0 = calibrated iOS 26 baseline. 0.0 = no rim highlight.
 uniform float uFresnelStrength;
+// 34: uDpr — 独立设备像素比。uScale 还包含 jelly/祖先变换，不能从中反推
+// DPR；屏幕恒宽描边必须用纯 DPR 将 logical px 转成目标物理像素宽度。
+uniform float uDpr;
 
 uniform sampler2D uBackground; // The captured background texture
 // Slot 22 (uData5.z): specular sharpness level — passed as float 0.0/1.0/2.0, cast to int.
@@ -114,6 +122,77 @@ vec3 applyGlassColorLW(vec3 liquidColor, vec4 glassColor) {
     return mix(directMix, luminosityMix, chromaWeight);
 }
 
+vec3 evaluateRoundedRectSdfAt(
+    vec2 localPoint,
+    vec2 size,
+    float uniformCornerRadius,
+    vec4 cornerRadii
+) {
+    vec2 halfSize = size * 0.5;
+    vec2 centered = localPoint - halfSize;
+    float radius = uniformCornerRadius;
+
+    // 中文说明：非对称圆角必须在每个 RGSS 子样本自己的象限重新选择半径；
+    // 如果沿用像素中心半径，恰好跨过水平/垂直中线的曲线像素会产生错误距离。
+    if (uniformCornerRadius < 0.0) {
+        if (centered.x < 0.0 && centered.y < 0.0) {
+            radius = cornerRadii.x;
+        } else if (centered.x >= 0.0 && centered.y < 0.0) {
+            radius = cornerRadii.y;
+        } else if (centered.x >= 0.0 && centered.y >= 0.0) {
+            radius = cornerRadii.z;
+        } else {
+            radius = cornerRadii.w;
+        }
+    }
+
+    vec2 q = abs(centered) - halfSize + radius;
+    vec2 outside = max(q, 0.0);
+    float outsideLength = length(outside);
+    float signedDistance =
+        outsideLength + min(max(q.x, q.y), 0.0) - radius;
+    vec2 normal = outsideLength > kNormalThreshold
+        ? sign(centered) * outside / outsideLength
+        : vec2(0.0);
+    return vec3(signedDistance, normal);
+}
+
+vec3 sampleRoundedRectEdgeAtOffset(
+    vec2 pixelOffset,
+    vec2 pixelCoord,
+    vec2 origin,
+    vec2 scale,
+    vec2 size,
+    float cornerRadius,
+    vec4 cornerRadii,
+    vec2 lightRimProfile,
+    vec2 darkRimProfile
+) {
+    // 中文说明：offset 是根表面的物理像素偏移。直接对片元坐标偏移后再走
+    // 与中心完全相同的 screen→local 换算，可同时覆盖 DPR、jelly 双轴缩放
+    // 与负缩放；不能只沿中心法线移动，否则曲率较大时八个样本仍会退化成直线。
+    vec2 sampleLocal = (pixelCoord + pixelOffset - origin) / scale;
+    vec3 sampleSdf = evaluateRoundedRectSdfAt(
+        sampleLocal,
+        size,
+        cornerRadius,
+        cornerRadii
+    );
+    vec2 sampleNormal = sampleSdf.yz;
+    vec2 safeScale = max(abs(scale), vec2(0.0001));
+    float sampleDistanceScale = getSdfDistanceScale(
+        sampleNormal / safeScale
+    );
+    return getSupersampledSdfEdgeContribution(
+        sampleSdf.x,
+        lightRimProfile.x * sampleDistanceScale,
+        darkRimProfile.x * sampleDistanceScale,
+        sampleNormal.x,
+        lightRimProfile.y,
+        darkRimProfile.y
+    );
+}
+
 out vec4 fragColor;
 
 void main() {
@@ -143,51 +222,87 @@ void main() {
   // ---- STAGE 0: COORDINATE SYNC ----
   vec2 pixelCoord = FlutterFragCoord().xy;
   vec2 localLogical = (pixelCoord - uOrigin) / uScale;
+  // 中文说明：区域高光使用玻璃本地逻辑高度。小尺寸保留 15% / 30% 比例，
+  // 大尺寸分别封顶 10dp / 20dp；正常缩放和非等比 jelly 拉伸仍跟随主体。
+  float glassVerticalPosition = clamp(
+    localLogical.y / max(uSize.y, 0.0001),
+    0.0,
+    1.0
+  );
+  float verticalAreaHighlightExposureLift = getVerticalAreaHighlightExposureLift(
+    glassVerticalPosition,
+    uSize.y
+  );
 
-  // ---- STAGE 1: SDF SHAPE & COMBINED NORMALS ----
-  // OPTIMIZATION: We merge SDF distance calculation with surface normal generation.
-  // The vector maxQ generated for the SDF exactly defines the surface gradient!
-  vec2 halfSize = uSize * 0.5;
-  vec2 p = localLogical - halfSize;
+  // ---- STAGE 1/2: SDF SHAPE & SURFACE NORMAL ----
+  // 中文说明：中心样本继续驱动折射和光照，边缘覆盖率则由后面的八个 RGSS
+  // 子样本独立重算 SDF；这样不会把高成本超采样扩散到背景折射纹理读取。
+  vec3 centerSdf = evaluateRoundedRectSdfAt(
+    localLogical,
+    uSize,
+    uCornerRadius,
+    uData6
+  );
+  float dist = centerSdf.x;
+  vec2 surfaceNormal = centerSdf.yz;
+  bool isEdge = dot(surfaceNormal, surfaceNormal) > 0.0;
 
-  // Asymmetric mode: uCornerRadius < 0 means per-corner radii are in uData6.
-  // Quadrant selection: p.x<0 && p.y<0 → topLeft, p.x≥0 && p.y<0 → topRight,
-  //                     p.x≥0 && p.y≥0 → bottomRight, p.x<0 && p.y≥0 → bottomLeft.
-  // (Y increases downward in logical coords; top = negative p.y half.)
-  float r;
-  if (uCornerRadius < 0.0) {
-    // Select per-corner radius based on fragment quadrant
-    if (p.x < 0.0 && p.y < 0.0) {
-      r = uData6.x; // topLeft
-    } else if (p.x >= 0.0 && p.y < 0.0) {
-      r = uData6.y; // topRight
-    } else if (p.x >= 0.0 && p.y >= 0.0) {
-      r = uData6.z; // bottomRight
-    } else {
-      r = uData6.w; // bottomLeft
-    }
-  } else {
-    r = uCornerRadius;
-  }
-
-  vec2 q = abs(p) - halfSize + r;
-  
-  vec2 maxQ = max(q, 0.0);
-  float maxQLen = length(maxQ);
-  float dist = maxQLen + min(max(q.x, q.y), 0.0) - r;
+  // 中文说明：先得到“每物理屏幕像素对应多少本地 SDF 距离”的二维梯度。
+  // L1 投影用于方形像素 AA，L2 长度用于屏幕恒宽换算；明确拆开二者后，
+  // 45° 圆弧不会再少估覆盖窗口，非等比 jelly 缩放也不会拉粗左右曲线。
+  vec2 safeRimScale = max(abs(uScale), vec2(0.0001));
+  vec2 rimScreenGradient = surfaceNormal / safeRimScale;
+  float rimDistanceScale = getSdfDistanceScale(rimScreenGradient);
+  float rimPixelFootprint = getSdfPixelFootprint(rimScreenGradient);
   float smoothing = 1.0 / uScale.x;
-  float mask = 1.0 - smoothstep(-smoothing, smoothing, dist);
 
-  if (mask <= 0.0) {
+  // 中文说明：名义宽度仍是设计参数；profile.x 是至少一物理像素的连续
+  // 横截面，profile.y 按名义宽度/有效宽度补偿能量，避免抗毛刺后视觉变粗。
+  const float lightRimLogicalWidth = 0.36;
+  const float darkRimLogicalWidth = 0.18;
+  float safeDpr = max(uDpr, 1.0);
+  vec2 lightRimProfile = getEnergyPreservingRimProfile(
+    lightRimLogicalWidth * safeDpr
+  );
+  vec2 darkRimProfile = getEnergyPreservingRimProfile(
+    darkRimLogicalWidth * safeDpr
+  );
+  float lightRimWidth = lightRimProfile.x * rimDistanceScale;
+  float darkRimWidth = darkRimProfile.x * rimDistanceScale;
+
+  float centerCoverage = clamp(
+    0.5 - dist / rimPixelFootprint,
+    0.0,
+    1.0
+  );
+  if (centerCoverage <= 0.0) {
     fragColor = vec4(0.0);
     return;
   }
 
-  // ---- STAGE 2: SURFACE NORMALS ----
-  // Since gradient is analytically derived from maximum positive divergence,
-  // we do not need to re-clamp and calculate vector magnitudes.
-  bool isEdge = maxQLen > kNormalThreshold;
-  vec2 surfaceNormal = isEdge ? (sign(p) * maxQ / maxQLen) : vec2(0.0);
+  vec3 supersampledEdge;
+  float centerInwardDistance = max(-dist, 0.0);
+  float edgeSamplingReach = max(lightRimWidth, darkRimWidth)
+      + rimPixelFootprint * 0.5;
+  if (centerCoverage >= 1.0 && centerInwardDistance > edgeSamplingReach) {
+    // 中文说明：完整内部像素不可能命中一物理像素终止边，直接返回满 alpha
+    // 和零描边；八次 SDF 仅在外轮廓的窄带执行，不增加背景纹理采样成本。
+    supersampledEdge = vec3(1.0, 0.0, 0.0);
+  } else {
+    vec3 edgeSampleSum =
+        sampleRoundedRectEdgeAtOffset(kEdgeRgss0, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss1, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss2, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss3, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss4, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss5, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss6, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile)
+      + sampleRoundedRectEdgeAtOffset(kEdgeRgss7, pixelCoord, uOrigin, uScale, uSize, uCornerRadius, uData6, lightRimProfile, darkRimProfile);
+    supersampledEdge = resolveEdgeSupersample(edgeSampleSum);
+  }
+  float mask = supersampledEdge.x;
+  float continuousLightRimMask = supersampledEdge.y;
+  float lateralDarkRimMask = supersampledEdge.z;
 
   // normalZ: the Z component of the 3D surface normal (view-facing component).
   // normalZ → 0 at the rim (surface nearly perpendicular to view ray)
@@ -200,9 +315,26 @@ void main() {
   float normalZ = sqrt(max(0.0, 1.0 - dot(surfaceNormal, surfaceNormal)));
 
   // ---- STAGE 3: HAIRLINE MASK ----
+  float distFromEdge = abs(dist);
+  float rimDistance = max(-dist, 0.0);
+  // 中文说明：双层遮罩已由八点真实覆盖面积解析完成。中心 rimDistance 只继续
+  // 服务白色高光避让与原有光学模型，避免对背景采样和 Fresnel 做八倍计算。
+  float innerHighlightGate = getInnerHighlightGate(
+    distFromEdge,
+    lightRimWidth,
+    uEdgeAbsorption
+  );
   float effectiveBorder = kBorderThickness + uIndicatorWeight * 0.2;
   float effectiveSmoothing = smoothing * (1.0 + uIndicatorWeight * 0.2);
-  float borderMask = 1.0 - smoothstep(0.0, effectiveSmoothing, abs(dist) - effectiveBorder);
+  float borderMask = 1.0 - smoothstep(
+    0.0,
+    effectiveSmoothing,
+    distFromEdge - effectiveBorder
+  );
+
+  // 中文说明：所有白色结构光统一向内让出终止边。edgeAbsorption 为 0 时
+  // innerHighlightGate 恒为 1，标准包的旧渲染结果保持不变。
+  borderMask *= innerHighlightGate;
 
   // ---- STAGE 3.5: SYNTHETIC DENSITY PHYSICS ----
   // Performance Optimization: When a parent container provides blur (Batch-Blur O(1) optimization),
@@ -350,7 +482,6 @@ void main() {
   //   20% white lift is enough to be distinct without looking frosty.
   // Hoist edgeInfluence to outer scope — used for refraction (PATH A) and
   // meniscus rim darkening (all paths). Must be declared before PATH A/B split.
-  float distFromEdge = abs(dist);
   const float edgeZone = 10.0;
   float edgeInfluence = smoothstep(edgeZone, 0.0, distFromEdge);
   edgeInfluence *= edgeInfluence; // quadratic falloff for natural lens curve
@@ -392,6 +523,24 @@ void main() {
       float litness2 = dot(surfaceNormal, uLightDirection);
       float dirScale2 = mix(1.4, 0.6, litness2 * 0.5 + 0.5);
       pmRgb2 *= max(0.0, 1.0 - lensTh2 * uEdgeAbsorption * dirScale2);
+
+      // 中文说明：无有效纹理时用既有主题背景亮度估计相对补光；共享函数会
+      // 按 outA2 预乘该估计，避免顶部区域在透明轮廓外形成白色漏边。
+      pmRgb2 = applyVerticalAreaHighlight(
+        pmRgb2,
+        vec3(uBackdropLuma),
+        verticalAreaHighlightExposureLift,
+        outA2
+      );
+
+      // 中文说明：无有效背景的回退分支同样叠加完整浅边和左右深边，避免
+      // 回退帧与正常采样帧之间出现轮廓结构跳变。
+      pmRgb2 = applyDualLayerRim(
+        pmRgb2,
+        continuousLightRimMask,
+        lateralDarkRimMask,
+        uEdgeAbsorption
+      );
       fragColor = vec4(clamp(pmRgb2, 0.0, 1.0) * mask, outA2 * mask);
     } else {
       // Normal PATH A — background texture is valid.
@@ -457,6 +606,26 @@ void main() {
       float absorptionA = 1.0 - lensThA * uEdgeAbsorption * dirScaleA;
       finalColor *= max(0.0, absorptionA);
 
+      // 中文说明：有效背景路径复用已折射的 bgRgb，肩部按背景逐通道最多消耗
+      // 剩余亮度空间的 35% / 20%；共享函数只在峰值核心把增益提升到 1.0，并用
+      // 宽 smoothstep 保留接近旧版 2dp 的可见范围，
+      // 所以白底端点更白但仍保留过渡，而且不增加纹理读取。
+      finalColor = applyVerticalAreaHighlight(
+        finalColor,
+        bgRgb,
+        verticalAreaHighlightExposureLift,
+        1.0
+      );
+
+      // 中文说明：必须晚于上面的 rim 与 fresnel 合成，才能让完整浅灰环
+      // 和锐利左右深边保持独立，不被白色反射覆盖。
+      finalColor = applyDualLayerRim(
+        finalColor,
+        continuousLightRimMask,
+        lateralDarkRimMask,
+        uEdgeAbsorption
+      );
+
       fragColor = vec4(finalColor * mask, mask);
     }
 
@@ -512,6 +681,24 @@ void main() {
     float litnessB = dot(surfaceNormal, uLightDirection);
     float dirScaleB = mix(1.4, 0.6, litnessB * 0.5 + 0.5);
     pmRgb *= max(0.0, 1.0 - lensThB * uEdgeAbsorption * dirScaleB);
+
+    // 中文说明：无背景纹理路径使用现有 uBackdropLuma 作为粗粒度背景估计，
+    // 再按 pmA 预乘并守住合法白点；区域反射不会改变透明度或制造白块。
+    pmRgb = applyVerticalAreaHighlight(
+      pmRgb,
+      vec3(uBackdropLuma),
+      verticalAreaHighlightExposureLift,
+      pmA
+    );
+
+    // 中文说明：Standard 常用的无背景纹理分支也使用相同双层边缘函数，
+    // 避免不同质量档位的浅色环和左右深边不一致。
+    pmRgb = applyDualLayerRim(
+      pmRgb,
+      continuousLightRimMask,
+      lateralDarkRimMask,
+      uEdgeAbsorption
+    );
 
     fragColor = vec4(clamp(pmRgb, 0.0, 1.0) * mask, pmA * mask);
   }

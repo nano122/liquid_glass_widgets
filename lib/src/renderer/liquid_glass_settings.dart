@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/widgets.dart';
+
 // [LOCAL PATCH]: GlassSpecularSharpness is our own type (not vendored).
 // It lives in lib/types/ not lib/src/renderer/.
 import '../../constants/glass_defaults.dart';
@@ -63,7 +64,9 @@ class LiquidGlassSettings {
     this.glowIntensity = 0.75,
     this.specularSharpness = GlassSpecularSharpness.medium,
     this.standardOpacityMultiplier = 1.0,
-    this.shadowElevation = 1.0,
+    // 中文说明：应用当前关闭所有玻璃外投影。字段仍保留以兼容上游 API，
+    // 但 effectiveShadow 会统一返回空列表，避免显式 elevation 绕过视觉策略。
+    this.shadowElevation = 0.0,
     this.shadow,
     this.whitenStrength = 0.0,
     this.whitenGated = true,
@@ -131,20 +134,21 @@ class LiquidGlassSettings {
     GlassSpecularSharpness specularSharpness = GlassSpecularSharpness.medium,
     double standardOpacityMultiplier = 1.0,
   }) : this(
-          visibility: visibility,
-          refractiveIndex: 1 + (refraction / 100) * 0.2,
-          thickness: depth,
-          chromaticAberration: 4 * (dispersion / 100),
-          lightIntensity: lightIntensity / 100,
-          blur: frost,
-          lightAngle: lightAngle,
-          ambientStrength: 0.1,
-          saturation: 1.5,
-          glassColor: glassColor,
-          specularSharpness: specularSharpness,
-          standardOpacityMultiplier: standardOpacityMultiplier,
-          // shadowElevation and shadow use their defaults (1.0 / null)
-        );
+         visibility: visibility,
+         refractiveIndex: 1 + (refraction / 100) * 0.2,
+         thickness: depth,
+         chromaticAberration: 4 * (dispersion / 100),
+         lightIntensity: lightIntensity / 100,
+         blur: frost,
+         lightAngle: lightAngle,
+         ambientStrength: 0.1,
+         saturation: 1.5,
+         glassColor: glassColor,
+         specularSharpness: specularSharpness,
+         standardOpacityMultiplier: standardOpacityMultiplier,
+         // shadowElevation and shadow use their defaults (0.0 / null); the
+         // fork's centralized policy keeps all glass surfaces shadowless.
+       );
 
   /// Retrieves the nearest [LiquidGlassSettings] from the widget tree.
   ///
@@ -341,7 +345,8 @@ class LiquidGlassSettings {
   /// For full control over shadow appearance, use [shadow] instead.
   /// If [shadow] is non-null, [shadowElevation] is ignored.
   ///
-  /// Defaults to 1.0.
+  /// Defaults to 0.0 in the Poiesis fork because outward glass drop shadows
+  /// are disabled by the centralized visual policy.
   final double shadowElevation;
 
   /// Custom light-mode drop shadow for glass surfaces.
@@ -350,8 +355,9 @@ class LiquidGlassSettings {
   /// The shadows are inverse-clipped to only appear outside the glass
   /// boundary, preventing the glass from blurring its own shadow.
   ///
-  /// When null (the default), the built-in Apple-matching shadow is used,
-  /// scaled by [shadowElevation].
+  /// When null (the default), the built-in Apple-matching shadow would be used,
+  /// scaled by [shadowElevation]. The Poiesis fork currently suppresses both
+  /// this override and the built-in shadow through [effectiveShadow].
   ///
   /// Has no effect in dark mode.
   final List<BoxShadow>? shadow;
@@ -366,6 +372,9 @@ class LiquidGlassSettings {
   /// its shadow with it, or the elevation stays at full strength underneath
   /// vanishing glass and then snaps away with it.
   List<BoxShadow> get effectiveShadow {
+    // 中文说明：Poiesis 统一禁用玻璃向外投射的阴影；先拦截显式 shadow，
+    // 再保留上游按 visibility 淡出的完整逻辑，避免重新启用策略后出现跳变。
+    if (!GlassShadow.dropShadowsEnabled) return const <BoxShadow>[];
     if (shadow != null) {
       if (visibility >= 1.0) return shadow!;
       return <BoxShadow>[
@@ -550,39 +559,49 @@ class LiquidGlassSettings {
     if (b == null) return a;
 
     return LiquidGlassSettings._withPinch(
-        visibility: lerpDouble(a.visibility, b.visibility, t)!,
-        glassColor: Color.lerp(a.glassColor, b.glassColor, t)!,
-        thickness: lerpDouble(a.thickness, b.thickness, t)!,
-        blur: lerpDouble(a.blur, b.blur, t)!,
-        chromaticAberration:
-            lerpDouble(a.chromaticAberration, b.chromaticAberration, t)!,
-        lightAngle: lerpDouble(a.lightAngle, b.lightAngle, t)!,
-        lightIntensity: lerpDouble(a.lightIntensity, b.lightIntensity, t)!,
-        ambientStrength: lerpDouble(a.ambientStrength, b.ambientStrength, t)!,
-        ambientRim: lerpDouble(a.ambientRim, b.ambientRim, t)!,
-        fresnelStrength: lerpDouble(a.fresnelStrength, b.fresnelStrength, t)!,
-        refractiveIndex: lerpDouble(a.refractiveIndex, b.refractiveIndex, t)!,
-        saturation: lerpDouble(a.saturation, b.saturation, t)!,
-        glowIntensity: lerpDouble(a.glowIntensity, b.glowIntensity, t)!,
-        specularSharpness: t < 0.5 ? a.specularSharpness : b.specularSharpness,
-        standardOpacityMultiplier: lerpDouble(
-            a.standardOpacityMultiplier, b.standardOpacityMultiplier, t)!,
-        shadowElevation: lerpDouble(a.shadowElevation, b.shadowElevation, t)!,
-        shadow: t < 0.5 ? a.shadow : b.shadow,
-        whitenStrength: lerpDouble(a.whitenStrength, b.whitenStrength, t)!,
-        whitenGated: t < 0.5 ? a.whitenGated : b.whitenGated,
-        edgeAbsorption: lerpDouble(a.edgeAbsorption, b.edgeAbsorption, t)!,
-        // Lerp the color so the backer fades smoothly (from/to transparent when
-        // one side is null), rather than popping at the midpoint.
-        backerColor: Color.lerp(a.backerColor, b.backerColor, t),
-        platformViewFallbackColor: Color.lerp(
-            a.platformViewFallbackColor, b.platformViewFallbackColor, t),
-        // A mode is not interpolable: it switches at the midpoint like any
-        // other enum in this class.
-        platformViewMode: t < 0.5 ? a.platformViewMode : b.platformViewMode,
-        // pinchStrength is interaction state — lerp it so transitions are smooth
-        // when the indicator fades between active/resting states.
-        pinchStrength: lerpDouble(a.pinchStrength, b.pinchStrength, t)!);
+      visibility: lerpDouble(a.visibility, b.visibility, t)!,
+      glassColor: Color.lerp(a.glassColor, b.glassColor, t)!,
+      thickness: lerpDouble(a.thickness, b.thickness, t)!,
+      blur: lerpDouble(a.blur, b.blur, t)!,
+      chromaticAberration: lerpDouble(
+        a.chromaticAberration,
+        b.chromaticAberration,
+        t,
+      )!,
+      lightAngle: lerpDouble(a.lightAngle, b.lightAngle, t)!,
+      lightIntensity: lerpDouble(a.lightIntensity, b.lightIntensity, t)!,
+      ambientStrength: lerpDouble(a.ambientStrength, b.ambientStrength, t)!,
+      ambientRim: lerpDouble(a.ambientRim, b.ambientRim, t)!,
+      fresnelStrength: lerpDouble(a.fresnelStrength, b.fresnelStrength, t)!,
+      refractiveIndex: lerpDouble(a.refractiveIndex, b.refractiveIndex, t)!,
+      saturation: lerpDouble(a.saturation, b.saturation, t)!,
+      glowIntensity: lerpDouble(a.glowIntensity, b.glowIntensity, t)!,
+      specularSharpness: t < 0.5 ? a.specularSharpness : b.specularSharpness,
+      standardOpacityMultiplier: lerpDouble(
+        a.standardOpacityMultiplier,
+        b.standardOpacityMultiplier,
+        t,
+      )!,
+      shadowElevation: lerpDouble(a.shadowElevation, b.shadowElevation, t)!,
+      shadow: t < 0.5 ? a.shadow : b.shadow,
+      whitenStrength: lerpDouble(a.whitenStrength, b.whitenStrength, t)!,
+      whitenGated: t < 0.5 ? a.whitenGated : b.whitenGated,
+      edgeAbsorption: lerpDouble(a.edgeAbsorption, b.edgeAbsorption, t)!,
+      // Lerp the color so the backer fades smoothly (from/to transparent when
+      // one side is null), rather than popping at the midpoint.
+      backerColor: Color.lerp(a.backerColor, b.backerColor, t),
+      platformViewFallbackColor: Color.lerp(
+        a.platformViewFallbackColor,
+        b.platformViewFallbackColor,
+        t,
+      ),
+      // A mode is not interpolable: it switches at the midpoint like any
+      // other enum in this class.
+      platformViewMode: t < 0.5 ? a.platformViewMode : b.platformViewMode,
+      // pinchStrength is interaction state — lerp it so transitions are smooth
+      // when the indicator fades between active/resting states.
+      pinchStrength: lerpDouble(a.pinchStrength, b.pinchStrength, t)!,
+    );
   }
 
   /// Helper for linear interpolation of doubles.
@@ -619,35 +638,34 @@ class LiquidGlassSettings {
     Color? backerColor,
     Color? platformViewFallbackColor,
     PlatformViewGlassMode? platformViewMode,
-  }) =>
-      LiquidGlassSettings._withPinch(
-        visibility: visibility ?? this.visibility,
-        glassColor: glassColor ?? this.glassColor,
-        thickness: thickness ?? this.thickness,
-        blur: blur ?? this.blur,
-        chromaticAberration: chromaticAberration ?? this.chromaticAberration,
-        lightAngle: lightAngle ?? this.lightAngle,
-        lightIntensity: lightIntensity ?? this.lightIntensity,
-        ambientStrength: ambientStrength ?? this.ambientStrength,
-        ambientRim: ambientRim ?? this.ambientRim,
-        fresnelStrength: fresnelStrength ?? this.fresnelStrength,
-        refractiveIndex: refractiveIndex ?? this.refractiveIndex,
-        saturation: saturation ?? this.saturation,
-        glowIntensity: glowIntensity ?? this.glowIntensity,
-        specularSharpness: specularSharpness ?? this.specularSharpness,
-        standardOpacityMultiplier:
-            standardOpacityMultiplier ?? this.standardOpacityMultiplier,
-        shadowElevation: shadowElevation ?? this.shadowElevation,
-        shadow: shadow ?? this.shadow,
-        whitenStrength: whitenStrength ?? this.whitenStrength,
-        whitenGated: whitenGated ?? this.whitenGated,
-        edgeAbsorption: edgeAbsorption ?? this.edgeAbsorption,
-        backerColor: backerColor ?? this.backerColor,
-        platformViewFallbackColor:
-            platformViewFallbackColor ?? this.platformViewFallbackColor,
-        platformViewMode: platformViewMode ?? this.platformViewMode,
-        pinchStrength: pinchStrength,
-      );
+  }) => LiquidGlassSettings._withPinch(
+    visibility: visibility ?? this.visibility,
+    glassColor: glassColor ?? this.glassColor,
+    thickness: thickness ?? this.thickness,
+    blur: blur ?? this.blur,
+    chromaticAberration: chromaticAberration ?? this.chromaticAberration,
+    lightAngle: lightAngle ?? this.lightAngle,
+    lightIntensity: lightIntensity ?? this.lightIntensity,
+    ambientStrength: ambientStrength ?? this.ambientStrength,
+    ambientRim: ambientRim ?? this.ambientRim,
+    fresnelStrength: fresnelStrength ?? this.fresnelStrength,
+    refractiveIndex: refractiveIndex ?? this.refractiveIndex,
+    saturation: saturation ?? this.saturation,
+    glowIntensity: glowIntensity ?? this.glowIntensity,
+    specularSharpness: specularSharpness ?? this.specularSharpness,
+    standardOpacityMultiplier:
+        standardOpacityMultiplier ?? this.standardOpacityMultiplier,
+    shadowElevation: shadowElevation ?? this.shadowElevation,
+    shadow: shadow ?? this.shadow,
+    whitenStrength: whitenStrength ?? this.whitenStrength,
+    whitenGated: whitenGated ?? this.whitenGated,
+    edgeAbsorption: edgeAbsorption ?? this.edgeAbsorption,
+    backerColor: backerColor ?? this.backerColor,
+    platformViewFallbackColor:
+        platformViewFallbackColor ?? this.platformViewFallbackColor,
+    platformViewMode: platformViewMode ?? this.platformViewMode,
+    pinchStrength: pinchStrength,
+  );
 
   @override
   bool operator ==(Object other) {
@@ -682,29 +700,29 @@ class LiquidGlassSettings {
 
   @override
   int get hashCode => Object.hashAll([
-        visibility,
-        glassColor,
-        thickness,
-        blur,
-        chromaticAberration,
-        lightAngle,
-        lightIntensity,
-        ambientStrength,
-        ambientRim,
-        fresnelStrength,
-        refractiveIndex,
-        saturation,
-        glowIntensity,
-        specularSharpness,
-        standardOpacityMultiplier,
-        shadowElevation,
-        shadow == null ? null : Object.hashAll(shadow!),
-        whitenStrength,
-        whitenGated,
-        edgeAbsorption,
-        backerColor,
-        platformViewFallbackColor,
-        platformViewMode,
-        pinchStrength,
-      ]);
+    visibility,
+    glassColor,
+    thickness,
+    blur,
+    chromaticAberration,
+    lightAngle,
+    lightIntensity,
+    ambientStrength,
+    ambientRim,
+    fresnelStrength,
+    refractiveIndex,
+    saturation,
+    glowIntensity,
+    specularSharpness,
+    standardOpacityMultiplier,
+    shadowElevation,
+    shadow == null ? null : Object.hashAll(shadow!),
+    whitenStrength,
+    whitenGated,
+    edgeAbsorption,
+    backerColor,
+    platformViewFallbackColor,
+    platformViewMode,
+    pinchStrength,
+  ]);
 }

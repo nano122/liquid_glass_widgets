@@ -2,6 +2,7 @@
 
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/widgets.dart';
 
 /// A callback used by [MultiShaderBuilder].
@@ -147,6 +148,7 @@ class MultiShaderBuilder extends StatefulWidget {
 class _MultiShaderBuilderState extends State<MultiShaderBuilder> {
   final Map<String, ui.FragmentProgram> _programs = {};
   final Map<String, ui.FragmentShader> _shaders = {};
+  int _loadGeneration = 0;
 
   static final Map<String, ui.FragmentProgram> _shaderCache =
       <String, ui.FragmentProgram>{};
@@ -160,14 +162,18 @@ class _MultiShaderBuilderState extends State<MultiShaderBuilder> {
   @override
   void didUpdateWidget(covariant MultiShaderBuilder oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.assetKeys != widget.assetKeys) {
+    // 中文说明：ShaderBuilder 每次 build 都会创建新的 `[assetKey]` List；
+    // List 默认按身份比较会把内容相同的 key 误判为变化，进而每次父级重建
+    // 都重新创建 FragmentShader。这里按顺序比较内容，顺序变化仍会正确重载。
+    if (!listEquals(oldWidget.assetKeys, widget.assetKeys)) {
       _loadShaders(widget.assetKeys);
     }
   }
 
   void _loadShaders(List<String> assetKeys) {
+    final generation = ++_loadGeneration;
+    _disposeShaders();
     _programs.clear();
-    _shaders.clear();
 
     // Check which shaders are already cached
     final uncachedKeys = <String>[];
@@ -189,13 +195,15 @@ class _MultiShaderBuilderState extends State<MultiShaderBuilder> {
     for (final assetKey in uncachedKeys) {
       ui.FragmentProgram.fromAsset(assetKey).then(
         (ui.FragmentProgram program) {
-          if (!mounted) {
+          // FragmentProgram 是不可变编译产物，可以跨实例缓存；即便本次请求
+          // 已过期，后来挂载的组件仍可复用它，不需要再次读盘和编译。
+          _shaderCache[assetKey] = program;
+          if (!mounted || generation != _loadGeneration) {
             return;
           }
           setState(() {
             _programs[assetKey] = program;
             _shaders[assetKey] = program.fragmentShader();
-            _shaderCache[assetKey] = program;
           });
         },
         onError: (Object error, StackTrace stackTrace) {
@@ -205,6 +213,24 @@ class _MultiShaderBuilderState extends State<MultiShaderBuilder> {
         },
       );
     }
+  }
+
+  void _disposeShaders() {
+    // 中文说明：FragmentShader 持有可变 uniform、sampler 和原生 GPU 资源，
+    // 不能像 FragmentProgram 一样全局共享；key 变化或组件销毁时必须显式释放。
+    for (final shader in _shaders.values) {
+      shader.dispose();
+    }
+    _shaders.clear();
+  }
+
+  @override
+  void dispose() {
+    // 让尚未完成的异步加载回调失效，再释放当前实例，避免旧 Future 把
+    // Shader 写回已经销毁或已经切换 key 的 State。
+    _loadGeneration++;
+    _disposeShaders();
+    super.dispose();
   }
 
   @override

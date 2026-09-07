@@ -21,9 +21,11 @@ import 'adaptive_glass.dart';
 /// Uses a specialized shader on Skia/Web to match Impeller's visual quality
 /// with magnification effects, enhanced rim lighting, and radial brightness.
 ///
-/// On Impeller with premium quality, it uses the native LiquidGlass renderer.
-/// On Skia/Web or standard quality, it uses the enhanced GlassEffect
-/// shader with magnification and structural rim effects.
+/// On Impeller, standard and premium quality use the native [LiquidGlassLayer].
+/// Rounded-rectangle indicators can replace only that layer's geometry texture
+/// with an analytic SDF; unsupported shapes retain the native texture geometry.
+/// On Skia/Web, it uses the enhanced GlassEffect shader with platform-adaptive
+/// sampling.
 class GlassEffect extends StatefulWidget {
   /// Creates a new [GlassEffect].
   const GlassEffect({
@@ -94,6 +96,36 @@ class GlassEffect extends StatefulWidget {
 
   /// Detects if Impeller rendering engine is active
   static bool get _canUseImpeller => ui.ImageFilter.isShaderFilterSupported;
+
+  /// Returns whether [shape] can be represented exactly by the analytic
+  /// interactive-indicator SDF.
+  ///
+  /// 中文说明：第一阶段只接管圆角矩形；superellipse、椭圆和非对称圆角
+  /// 继续走上游几何纹理管线，确保性能优化不会悄悄改变轮廓曲率。
+  @visibleForTesting
+  static bool supportsAnalyticPremium(LiquidShape shape) =>
+      shape is LiquidRoundedRectangle;
+
+  /// Pure routing predicate shared by production code and regression tests.
+  @visibleForTesting
+  static bool shouldUseAnalyticPremium({
+    required bool isImpeller,
+    required LiquidShape shape,
+  }) =>
+      isImpeller && supportsAnalyticPremium(shape);
+
+  /// Returns whether Standard/Premium must render through the official
+  /// compositor layer.
+  ///
+  /// 中文说明：这个判断刻意不依赖具体 shape。复杂形状只是不能省掉 geometry
+  /// texture，不代表可以退回交互指示器的矩形 Shader；Standard 与 Premium
+  /// 在 Impeller 上都必须保持同一套官方合成边界和终止边实现。
+  @visibleForTesting
+  static bool shouldUseOfficialPremiumLayer({
+    required bool isImpeller,
+    required GlassQuality quality,
+  }) =>
+      isImpeller && quality != GlassQuality.minimal;
 
   // Dummy 1x1 transparent image for when no background is captured.
   // Lazily allocated on first paint to guarantee zero GPU raster work
@@ -235,6 +267,15 @@ class _GlassEffectState extends State<GlassEffect>
 
   GlobalKey? get _effectiveKey => widget.backgroundKey ?? _cachedScopeKey;
 
+  /// 中文说明：受支持的 Impeller Standard/Premium 指示器由官方 [LiquidGlassLayer]
+  /// 直接读取 compositor backdrop，并在同一个最终渲染 Shader 内计算圆角矩形
+  /// SDF。这里必须停止背景快照，否则会重新进入透明 Scaffold 的黑色纹理问题。
+  bool get _usesAnalyticPremiumBackdrop =>
+      !kIsWeb &&
+      GlassEffect._canUseImpeller &&
+      widget.quality != GlassQuality.minimal &&
+      GlassEffect.supportsAnalyticPremium(widget.shape);
+
   void _updateTicker() {
     // Background capture requirements:
     //  1. Widget is actively interacting (cost only paid during gesture)
@@ -243,8 +284,12 @@ class _GlassEffectState extends State<GlassEffect>
     //     glass (e.g. GlassSwitch thumb). Capturing the background would let the
     //     green track bleed through as a dark/tinted frosted overlay, which
     //     contradicts the intended white glass bloom effect.
-    final bool shouldCapture = widget.interactionIntensity > 0.01 &&
+    final bool isInteracting = widget.interactionIntensity > 0.01;
+    // 中文说明：解析式 Premium 使用实时 compositor backdrop；只有 Standard、
+    // Web 或不受解析式 SDF 支持的旧路径才需要背景边界快照。
+    final bool shouldCapture = isInteracting &&
         _effectiveKey != null &&
+        !_usesAnalyticPremiumBackdrop &&
         widget.settings.blur > 0.0;
     if (shouldCapture) {
       if (!_ticker.isActive) {
@@ -255,10 +300,12 @@ class _GlassEffectState extends State<GlassEffect>
     } else {
       if (_ticker.isActive) {
         _ticker.stop();
+      }
+      // 中文说明：质量或形状切换到实时 Premium 后立即释放旧快照，防止 Shader
+      // 继续持有已经无用的 GPU 纹理；Standard 结束交互时也沿用原释放语义。
+      if (_backgroundImage != null) {
         _backgroundImage?.dispose();
         _backgroundImage = null;
-        // debugPrint(
-        //     '[GlassEffect] 📸 Interaction finished, cleared snapshot.');
       }
     }
   }
@@ -281,13 +328,13 @@ class _GlassEffectState extends State<GlassEffect>
     final currentPos = (key.currentContext?.findRenderObject() as RenderBox?)
         ?.localToGlobal(Offset.zero);
 
-    // Capture on geometry change always; during interaction capture every frame
-    // since toImageSync() is synchronous (no GPU readback, no CPU copy).
+    // 中文说明：能进入这里的都是 Standard/Web/复杂形状旧路径，继续按上游语义
+    // 在交互中刷新背景；解析式 Premium 已在 _updateTicker 中完全跳过快照。
     final bool isInteracting = widget.interactionIntensity > 0.05;
     bool needsCapture = _backgroundImage == null;
     needsCapture |= _lastCaptureSize != currentSize;
     needsCapture |= _lastCapturePosition != currentPos;
-    needsCapture |= isInteracting; // every frame during drag — free cost
+    needsCapture |= isInteracting;
 
     if (needsCapture) {
       _captureBackground(boundary, currentSize, currentPos);
@@ -443,6 +490,10 @@ class _GlassEffectState extends State<GlassEffect>
     // 2. Resolve the background refraction source
     final effectiveKey = widget.backgroundKey ?? LiquidGlassScope.of(context);
     final shader = _activeShader;
+    final bool useAnalyticPremium = GlassEffect.shouldUseAnalyticPremium(
+      isImpeller: isImpeller,
+      shape: widget.shape,
+    );
 
     // VQ4: Content-adaptive glass strength proxy.
     final isDark = GlassTheme.brightnessOf(context) == Brightness.dark;
@@ -471,8 +522,16 @@ class _GlassEffectState extends State<GlassEffect>
       );
     }
 
-    // Path B: Native Impeller (Premium only)
-    if (isImpeller && widget.quality == GlassQuality.premium) {
+    // Path B: Native Impeller Standard/Premium.
+    //
+    // 中文说明：Standard/Premium 始终进入官方 LiquidGlassLayer 合成链；圆角矩形通过
+    // preferAnalyticRoundedRectangle 只替换该层内部的 geometry texture，复杂
+    // 形状继续使用官方纹理几何。这里不再创建第二个 BackdropFilterLayer，避免
+    // 空 child 使过滤边界扩大成导航栏上的不透明大方框。
+    if (GlassEffect.shouldUseOfficialPremiumLayer(
+      isImpeller: isImpeller,
+      quality: widget.quality,
+    )) {
       // No outer ClipPath here: a ClipPath clips in the widget's LOCAL (pre-jelly)
       // coordinate space. When the parent Transform stretches the indicator taller
       // during jelly physics, the already-clipped content has a hard edge at the
@@ -481,19 +540,8 @@ class _GlassEffectState extends State<GlassEffect>
       // and the shader uses SDF alpha masking for the pill boundary — both of which
       // DO stretch correctly with the parent Transform.
       //
-      // Capture path: when _backgroundImage is available (the ticker has already
-      // captured the background boundary at least once), pass it directly to
-      // LiquidGlass.withOwnLayer so the shader reads from the deterministic
-      // captured texture instead of emitting a live BackdropFilterLayer.
-      // This eliminates the Impeller compositor ordering dependency that caused
-      // the opaque-white indicator bug (#99) while preserving the full 3D
-      // geometry rendering pipeline. Performance is strictly better: one
-      // toImageSync capture per frame (already happening) replaces a heavyweight
-      // BackdropFilterLayer compositor pass.
-      //
-      // Falls back to the live BackdropFilter path if no capture is available
-      // yet (first frame before the ticker has fired) — zero visual difference
-      // since the indicator is invisible until thickness > 0.01 anyway.
+      // 中文说明：形状不受解析式 SDF 支持时保留完整上游管线；这是视觉
+      // 正确性回退，不把 superellipse/椭圆强行近似成圆角矩形。
       //
       // coverage:ignore-start
       // Unreachable in unit tests: isImpeller=false (no real GPU renderer).
@@ -502,14 +550,21 @@ class _GlassEffectState extends State<GlassEffect>
         shape: widget.shape,
         settings: widget.settings,
         clipExpansion: widget.clipExpansion,
-        captureImage: _backgroundImage,
-        captureOriginInScreenSpace: _lastCapturePosition ?? Offset.zero,
+        preferAnalyticRoundedRectangle: useAnalyticPremium,
+        // 中文说明：解析式圆角矩形必须使用官方层的实时 backdrop。复杂形状
+        // 仍可沿用既有显式捕获回退，维持 PlatformView 等旧场景的兼容性。
+        captureImage: useAnalyticPremium ? null : _backgroundImage,
+        captureOriginInScreenSpace: useAnalyticPremium
+            ? Offset.zero
+            : (_lastCapturePosition ?? Offset.zero),
         child: widget.child,
       );
       // coverage:ignore-end
     }
 
     // 4. Resolve if we can use the high-fidelity refraction shader
+    // Standard 只有在 Skia/Web 或其他非官方层场景才会到这里，并需要有效的
+    // GlassBackgroundSource，才能给交互 Shader 绑定显式背景纹理。
     final bool canUseRefraction = effectiveKey != null && !avoidsRefraction;
 
     // Standard-path structural normalization for interactive_indicator.frag.
@@ -521,7 +576,8 @@ class _GlassEffectState extends State<GlassEffect>
     // NOTE: This mirrors the AdaptiveGlass normalization for lightweight_glass.frag
     // (cards/buttons). Both are intentional Standard-path normalization sites —
     // each scoped to its own shader's parameter space.
-    // Premium exits above via LiquidGlass.withOwnLayer; this block never runs there.
+    // Impeller Standard/Premium exits above；只有 Skia/Web 的 Standard 才应用
+    // 下面的视觉归一化系数。
     final double effectiveRimThickness = widget.quality == GlassQuality.standard
         ? widget.rimThickness * 0.35
         : widget.rimThickness;
@@ -555,8 +611,10 @@ class _GlassEffectState extends State<GlassEffect>
       effectiveSettings = widget.settings;
     }
 
-    // Path B: High-Fidelity Refraction Shader (Custom GLSL)
-    // This is the "New Shader" featuring magnification and liquid distortion.
+    // Path C: Skia/Web Standard high-fidelity refraction shader (Custom GLSL).
+    // Impeller Standard/Premium 已由官方 LiquidGlassLayer 接管；此 RenderObject
+    // 只处理显式纹理的 Skia/Web 路径，不允许再次发出嵌套 ImageFilter.shader
+    // 合成层。
     // No outer ClipPath: the shader computes SDF alpha internally for the pill
     // boundary. An outer ClipPath would clip in local (pre-jelly) space,
     // producing a hard cutoff at the original pill height when the parent
@@ -643,6 +701,7 @@ class _InteractiveIndicatorEffect extends SingleChildRenderObjectWidget {
   final double interactionIntensity;
   final double densityFactor;
   final double backdropLuma;
+
   final ui.Image? backgroundImage;
   final GlobalKey? backgroundKey;
   final double devicePixelRatio;
@@ -877,8 +936,6 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
   double _cachedLightCos;
   double _cachedLightSin;
 
-  // Only force compositing when blur > 0 (the BackdropFilterLayer path).
-  // When blur is 0, _paintGlassContent draws directly — no compositing layer.
   @override
   bool get alwaysNeedsCompositing => _settings.effectiveBlur > 0;
 
@@ -928,12 +985,18 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     return _cachedInteractiveFilter!;
   }
 
-  // Reusable ClipPathLayer handle — avoids allocation on every paint frame.
+  // 中文说明：Standard 逐帧复用 blur 与裁剪层，避免 120Hz 手势期间反复
+  // 分配 EngineLayer。Premium 的实时 backdrop 层统一由 LiquidGlassLayer 持有。
   final _clipPathLayerHandle = LayerHandle<ClipPathLayer>();
+  final _blurLayerHandle = LayerHandle<BackdropFilterLayer>();
 
   @override
   void dispose() {
+    // 中文说明：先断开 blur filter 的 GPU 引用，再释放 layer handle，沿用
+    // 官方渲染器针对 Vulkan/Mali 销毁时序的处理。
+    _blurLayerHandle.layer?.filter = ui.ImageFilter.blur(sigmaX: 0, sigmaY: 0);
     _clipPathLayerHandle.layer = null;
+    _blurLayerHandle.layer = null;
     super.dispose();
   }
 
@@ -944,6 +1007,8 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     final blurSigma = _settings.effectiveBlur;
     if (blurSigma > 0) {
       final filter = _getInteractiveFilter(blurSigma);
+      final blurLayer = (_blurLayerHandle.layer ??= BackdropFilterLayer())
+        ..filter = filter;
 
       // Clip blur to the pill shape so the BackdropFilterLayer does not bleed
       // into the expansion zone around the jelly-physics draw rect.
@@ -961,7 +1026,7 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
         pillPath,
         (context, offset) {
           context.pushLayer(
-            BackdropFilterLayer(filter: filter),
+            blurLayer,
             (context, offset) {
               _paintGlassContent(context, offset);
             },
@@ -973,6 +1038,7 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
       );
     } else {
       _clipPathLayerHandle.layer = null;
+      _blurLayerHandle.layer = null;
       _paintGlassContent(context, offset);
     }
   }
@@ -1118,13 +1184,22 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     _shader.setFloat(index++, _rimThickness);
     _shader.setFloat(index++, _rimSmoothing);
 
-    // Device pixel ratio — used by textureBilinear() in the shader to
-    // convert logical uBackgroundSize to physical texel dimensions.
+    // Device pixel ratio — used by sampleBackground() in the shader to
+    // convert logical uBackgroundSize to physical texel dimensions before the
+    // 中文说明：半 texel 边界收缩，防止形变坐标采到纹理有效范围之外。
     // index 32 (after the 32 floats mapped to uData0..uData7).
     _shader.setFloat(index++, _devicePixelRatio);
 
     // Slot 33: edgeAbsorption — Beer-Lambert meniscus rim darkening [0..1].
     // Passed directly — what the caller sets is what the shader gets.
     _shader.setFloat(index++, _edgeAbsorption.clamp(0.0, 1.0));
+
+    // Slot 34: 解析式凹透镜 pinch。Premium 旧管线从 geometry texture
+    // 推导位移；快速路径直接使用同一动画强度在 SDF 坐标中计算。
+    _shader.setFloat(index++, _settings.pinchStrength.clamp(0.0, 1.0));
+
+    // Slot 35: 显式可见度。indicator 的 glassColor 可以是全透明，不能借用
+    // tint alpha 表达淡入淡出，否则捕获到背景后玻璃会在首帧突然跳到高不透明度。
+    _shader.setFloat(index++, _settings.visibility.clamp(0.0, 1.0));
   }
 }

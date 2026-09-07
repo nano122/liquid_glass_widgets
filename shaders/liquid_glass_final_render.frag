@@ -31,6 +31,11 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 
 #include <flutter/runtime_effect.glsl>
 #include "displacement_encoding.glsl"
+// 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
+// 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
+// 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
+// POIESIS_EDGE_TREATMENT_ADLER32: c288c981
+#include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
 
@@ -47,7 +52,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // Slots 13:  uWhiten, uWhitenGated, uPinchStrength
 // Slots 14-15: uBackgroundFallback
 // Slots 16:  uCaptureOffset  — x, y
-// Slots 17:  uEdgeConfig     — ambientRim (scaled by DPR/3.0), fresnelStrength, dprScale (DPR/3.0), pad
+// Slots 17:  uEdgeConfig     — ambientRim (scaled by DPR/3.0), fresnelStrength, dprScale (DPR/3.0), edgeAbsorption
 uniform vec2 uSize;
 uniform vec2 uGeometryOffset;
 uniform vec2 uGeometrySize;
@@ -91,11 +96,24 @@ uniform vec4 uBackgroundFallback;
 //   to the correct texel in the pre-captured bar texture.
 uniform vec2 uCaptureOffset;
 
-// Slot 28-31: uEdgeConfig — x: ambientRim (scaled by DPR/3.0), y: fresnelStrength, z: dprScale (DPR/3.0), w: pad
+// Slot 28-31: uEdgeConfig — x: ambientRim (scaled by DPR/3.0), y: fresnelStrength, z: dprScale (DPR/3.0), w: edgeAbsorption
 uniform vec4 uEdgeConfig;
 
-// Slot 32: uPlatformViewMode — 0 = fallbackColor (default), 1 = passthrough.
-// See PlatformViewGlassMode. At 0 this shader is bit for bit unchanged.
+// Slots 32-43：解析式圆角信息与完整几何逆仿射。
+//
+// 中文说明：解析式与普通 geometry texture 共享“屏幕物理像素 → 几何本地
+// 逻辑像素”的 2x3 逆仿射。这样多形状底栏经过祖先旋转/斜切后，纹理 alpha、
+// 法线和最外描边仍使用同一套局部几何，不再退化为屏幕轴对齐包围盒。
+//   uAnalyticRect      = (本地宽, 本地高, 本地圆角半径, enabled)
+//   uAnalyticInverseX = 屏幕物理像素 → shape 本地逻辑 x 的仿射行
+//   uAnalyticInverseY = 屏幕物理像素 → shape 本地逻辑 y 的仿射行
+//   uAnalyticInverseX.w == 1 表示逆仿射有效；捕获/透视兼容路径写 0。
+uniform vec4 uAnalyticRect;
+uniform vec4 uAnalyticInverseX;
+uniform vec4 uAnalyticInverseY;
+
+// Slot 44：上游 v1.3.0 的 PlatformView 模式移动到 Poiesis 几何参数之后，
+// 0 = fallbackColor（默认），1 = passthrough。
 uniform float uPlatformViewMode;
 
 // uThickness directly and is already DPR-independent).
@@ -165,6 +183,195 @@ vec4 textureBilinear(vec2 uv, vec2 size, vec2 invSize) {
     return bg;
 }
 
+vec3 analyticRoundedRectSdfAt(vec2 localPoint) {
+    vec2 size = max(uAnalyticRect.xy, vec2(0.001));
+    vec2 halfSize = size * 0.5;
+    float radius = min(uAnalyticRect.z, min(halfSize.x, halfSize.y));
+    vec2 centered = localPoint - halfSize;
+    vec2 q = abs(centered) - halfSize + radius;
+    vec2 outside = max(q, 0.0);
+    float outsideLength = length(outside);
+    float sdLogical = min(max(q.x, q.y), 0.0) + outsideLength - radius;
+
+    // 圆角矩形 SDF 的解析梯度。角区使用归一化圆弧方向，直边区直接选择
+    // 最近轴；深层中心的梯度不会参与折射（nCos 已经归零）。
+    vec2 gradient;
+    if (outsideLength > 1e-5) {
+        gradient = (outside / outsideLength) * sign(centered);
+    } else if (q.x > q.y) {
+        gradient = vec2(sign(centered.x), 0.0);
+    } else {
+        gradient = vec2(0.0, sign(centered.y));
+    }
+
+    return vec3(sdLogical, gradient);
+}
+
+vec4 analyticRoundedRectGeometry(vec2 localPoint, float thickness) {
+    vec3 sdfData = analyticRoundedRectSdfAt(localPoint);
+    float sdLogical = sdfData.x;
+    vec2 gradient = sdfData.yz;
+
+    // 中文说明：先用逆仿射把本地 SDF 梯度投到屏幕空间。方形屏幕像素在
+    // 当前法线上的覆盖支撑宽度必须取 L1 投影；旧版 L2 在斜向圆弧处少估
+    // AA，导致直边正常而曲线毛刺。后续双层描边复用同一 L1 足迹。
+    vec2 screenGradient = vec2(
+        gradient.x * uAnalyticInverseX.x + gradient.y * uAnalyticInverseY.x,
+        gradient.x * uAnalyticInverseX.y + gradient.y * uAnalyticInverseY.y
+    );
+    float localDistancePerScreenPixel = getSdfPixelFootprint(screenGradient);
+    float signedDistanceInScreenPixels =
+        sdLogical / localDistancePerScreenPixel;
+    float foregroundAlpha = clamp(
+        0.5 - signedDistanceInScreenPixels,
+        0.0,
+        1.0
+    );
+    if (foregroundAlpha < 0.01 || thickness <= 0.0) {
+        return vec4(0.0);
+    }
+
+    // 中文说明：外侧半像素只承担轮廓覆盖率，不能把玻璃曲面继续外推；
+    // 光学高度和法线仍钳制在真实 SDF 边界，避免 AA 区产生额外折射亮边。
+    float dpr = max(1.0, uEdgeConfig.z * 3.0);
+    float sdPhysical = min(sdLogical, 0.0) * dpr;
+    float nCos = clamp((thickness + sdPhysical) / thickness, 0.0, 1.0);
+    vec2 normalXY = gradient * nCos;
+    float x = thickness + sdPhysical;
+    float sqrtTerm = sqrt(max(0.0, thickness * thickness - x * x));
+    float height = mix(sqrtTerm, thickness, float(sdPhysical < -thickness));
+    return encodeGeometryData(normalXY, height, thickness, foregroundAlpha);
+}
+
+// 中文说明：把 Flutter 根表面的物理片元坐标还原到几何纹理生成时的局部
+// 逻辑坐标。这一函数同时服务解析式单形状和 Premium 多形状纹理分支。
+vec2 geometryLocalPointFromFragment(vec2 fragCoord) {
+    return vec2(
+        dot(uAnalyticInverseX.xy, fragCoord) + uAnalyticInverseX.z,
+        dot(uAnalyticInverseY.xy, fragCoord) + uAnalyticInverseY.z
+    );
+}
+
+// 中文说明：geometry texture 保存的是局部 SDF 法线。位置使用逆仿射后，
+// 折射与镜面光仍需把法线方向变回屏幕坐标；J^T * n 正是局部距离场在屏幕
+// 上的梯度方向。保留原长度可继续表达玻璃曲面的倾斜程度。
+vec2 geometryNormalToScreen(vec2 localNormal) {
+    float localLength = length(localNormal);
+    if (localLength < 1e-5 || uAnalyticInverseX.w < 0.5) {
+        return localNormal;
+    }
+    vec2 screenGradient = vec2(
+        localNormal.x * uAnalyticInverseX.x + localNormal.y * uAnalyticInverseY.x,
+        localNormal.x * uAnalyticInverseX.y + localNormal.y * uAnalyticInverseY.y
+    );
+    float screenLength = length(screenGradient);
+    if (screenLength < 1e-5) {
+        return localNormal;
+    }
+    return screenGradient * (localLength / screenLength);
+}
+
+vec2 geometryTextureUvFromFragment(vec2 sampleFragCoord) {
+    vec2 sampleUv;
+    if (uAnalyticInverseX.w > 0.5) {
+        vec2 textureLocalPoint = geometryLocalPointFromFragment(sampleFragCoord);
+        sampleUv = (textureLocalPoint - uGeometryOffset) / uGeometrySize;
+    } else {
+        sampleUv = (sampleFragCoord - uGeometryOffset) / uGeometrySize;
+    }
+    #ifdef LGR_GLES_FLIP_SAMPLE_Y
+        sampleUv.y = 1.0 - sampleUv.y;
+    #endif
+    return clamp(sampleUv, 0.0, 1.0);
+}
+
+float rimDistanceFromGeometry(vec4 geometryData, float thickness) {
+    float normalizedHeight = geometryData.b;
+    float cosTerm = sqrt(max(
+        0.0,
+        1.0 - normalizedHeight * normalizedHeight
+    ));
+    return thickness * (1.0 - cosTerm);
+}
+
+vec3 sampleAnalyticEdgeAtOffset(
+    vec2 pixelOffset,
+    vec2 fragCoord,
+    vec2 lightRimProfile,
+    vec2 darkRimProfile
+) {
+    // 中文说明：解析式 Premium 分支直接在八个物理子像素位置重新求 SDF，
+    // 不读取几何占位纹理。每个样本也独立通过逆仿射计算屏幕距离比例，因此
+    // 旋转、斜切与非均匀 jelly 缩放下仍保持真实一物理像素的连续终止边。
+    vec2 sampleLocal = geometryLocalPointFromFragment(
+        fragCoord + pixelOffset
+    );
+    vec3 sampleSdf = analyticRoundedRectSdfAt(sampleLocal);
+    vec2 sampleNormal = sampleSdf.yz;
+    vec2 sampleScreenGradient = vec2(
+        sampleNormal.x * uAnalyticInverseX.x
+            + sampleNormal.y * uAnalyticInverseY.x,
+        sampleNormal.x * uAnalyticInverseX.y
+            + sampleNormal.y * uAnalyticInverseY.y
+    );
+    float sampleDistanceScale = getSdfDistanceScale(sampleScreenGradient);
+    return getSupersampledSdfEdgeContribution(
+        sampleSdf.x,
+        lightRimProfile.x * sampleDistanceScale,
+        darkRimProfile.x * sampleDistanceScale,
+        sampleNormal.x,
+        lightRimProfile.y,
+        darkRimProfile.y
+    );
+}
+
+vec3 sampleTextureEdgeAtOffset(
+    vec2 pixelOffset,
+    vec2 fragCoord,
+    float thickness,
+    float dpr,
+    vec2 lightRimProfile,
+    vec2 darkRimProfile
+) {
+    // 中文说明：多形状融合只能从 geometry texture 恢复 SDF 结果。对八个
+    // 物理子像素分别读取 alpha/法线/高度，并在各自位置还原描边面积，可消除
+    // 单次双线性法线产生的 chord 明暗振荡；背景纹理仍只按原流程采样一次。
+    vec4 sampleGeometry = texture(
+        uGeometryTexture,
+        geometryTextureUvFromFragment(fragCoord + pixelOffset)
+    );
+    vec2 sampleLocalNormal = decodeNormalXY(sampleGeometry);
+    float sampleNormalLength = max(length(sampleLocalNormal), 1e-4);
+    vec2 sampleLocalRimNormal = sampleLocalNormal / sampleNormalLength;
+    vec2 sampleScreenGradient = vec2(
+        sampleLocalRimNormal.x * uAnalyticInverseX.x
+            + sampleLocalRimNormal.y * uAnalyticInverseY.x,
+        sampleLocalRimNormal.x * uAnalyticInverseX.y
+            + sampleLocalRimNormal.y * uAnalyticInverseY.y
+    );
+    float inverseEnabled = step(0.5, uAnalyticInverseX.w);
+    float sampleDistanceScale = mix(
+        1.0,
+        getSdfDistanceScale(sampleScreenGradient) * dpr,
+        inverseEnabled
+    );
+    float samplePixelFootprint = mix(
+        1.0,
+        getSdfPixelFootprint(sampleScreenGradient) * dpr,
+        inverseEnabled
+    );
+    return getFilteredSdfEdgeContribution(
+        rimDistanceFromGeometry(sampleGeometry, thickness),
+        lightRimProfile.x * sampleDistanceScale,
+        darkRimProfile.x * sampleDistanceScale,
+        samplePixelFootprint,
+        sampleGeometry.a,
+        sampleLocalRimNormal.x,
+        lightRimProfile.y,
+        darkRimProfile.y
+    );
+}
+
 void main() {
     // Unpacked here rather than at global scope: global non-constant initialisers
     // (e.g. float x = uniform.y) are valid in desktop GLSL 4.6 but rejected by
@@ -192,24 +399,120 @@ void main() {
         screenUV.y = 1.0 - screenUV.y;
     #endif
 
-    vec2 geometryUV = (fragCoord - uGeometryOffset) / uGeometrySize;
-    #ifdef LGR_GLES_FLIP_SAMPLE_Y
-        geometryUV.y = 1.0 - geometryUV.y;
-    #endif
+    vec2 geometryUV;
+    vec4 geometryData;
+    float glassVerticalPosition;
+    // 中文说明：Premium 的尺寸来源可能是本地逻辑像素，也可能是捕获兼容
+    // 路径的物理像素。提前还原 DPR，确保后续 10 / 20 的上限始终表示 dp。
+    float dpr = max(1.0, uEdgeConfig.z * 3.0);
+    float glassLogicalHeight;
+    if (uAnalyticRect.w > 0.5) {
+        // 中文说明：FlutterFragCoord 属于官方根 backdrop 表面；Dart 已把
+        // shape→screen 的完整 jelly 仿射变换求逆，因此这里能精确恢复本地坐标，
+        // 不把横向拉伸后的椭圆角错误近似成屏幕轴对齐的圆角。
+        vec2 localPoint = geometryLocalPointFromFragment(fragCoord);
+        geometryUV = clamp(localPoint / max(uAnalyticRect.xy, vec2(0.001)), 0.0, 1.0);
+        glassVerticalPosition = geometryUV.y;
+        glassLogicalHeight = uAnalyticRect.y;
+        geometryData = analyticRoundedRectGeometry(localPoint, uThickness);
+    } else {
+        if (uAnalyticInverseX.w > 0.5) {
+            // 中文说明：普通纹理也先回到玻璃层本地坐标；uGeometryOffset/Size
+            // 此时就是纹理录制时的本地逻辑边界，旋转系数不会再被 AABB 丢失。
+            vec2 textureLocalPoint = geometryLocalPointFromFragment(
+                fragCoord
+            );
+            geometryUV = (textureLocalPoint - uGeometryOffset) / uGeometrySize;
+            // 中文说明：有效逆仿射路径写入的是纹理本地逻辑边界，可直接作为
+            // dp 高度使用，旋转和非等比缩放不会改变设计空间中的高光上限。
+            glassLogicalHeight = uGeometrySize.y;
+        } else {
+            // 捕获纹理或透视矩阵无法用 2x3 仿射精确表达，保留原屏幕包围盒
+            // 采样作为兼容路径；不会用错误逆矩阵污染正常旋转动画。
+            vec2 textureScreenPoint = fragCoord;
+            geometryUV = (textureScreenPoint - uGeometryOffset) / uGeometrySize;
+            // 中文说明：捕获或透视兼容路径的边界是物理像素，必须除以 DPR
+            // 才能与另外两条 Premium 分支共享 10dp / 20dp 的逻辑上限。
+            glassLogicalHeight = uGeometrySize.y / dpr;
+        }
+        // 中文说明：先保存几何本地的纵向比例，再处理旧 GLES 的纹理 Y 翻转。
+        // 区域高光属于玻璃自身的顶部/底部，不应随纹理存储原点变化而上下颠倒。
+        glassVerticalPosition = clamp(geometryUV.y, 0.0, 1.0);
+        #ifdef LGR_GLES_FLIP_SAMPLE_Y
+            geometryUV.y = 1.0 - geometryUV.y;
+        #endif
 
-    // Clamp geometryUV to [0, 1] for two reasons:
-    // 1. Impeller's texture samplers may default to Repeat mode. Without this
-    //    clamp, a fragment slightly outside uGeometrySize (e.g. during
-    //    LiquidStretch scaling overshoot) wraps around and samples the opposite
-    //    edge of the geometry SDF, producing inverted normals and extreme
-    //    chromatic aliasing (jagged rainbows).
-    // 2. Fragments genuinely outside the pill (the _clipExpansion zone) get
-    //    clamped to the SDF edge, which has near-zero alpha. The
-    //    `geometryData.a < 0.01` early-out below discards them efficiently
-    //    without needing a separate bounds check here.
-    geometryUV = clamp(geometryUV, 0.0, 1.0);
+        // Clamp geometryUV to [0, 1] for two reasons:
+        // 1. Impeller's texture samplers may default to Repeat mode. Without this
+        //    clamp, a fragment slightly outside uGeometrySize (e.g. during
+        //    LiquidStretch scaling overshoot) wraps around and samples the opposite
+        //    edge of the geometry SDF, producing inverted normals and extreme
+        //    chromatic aliasing (jagged rainbows).
+        // 2. Fragments genuinely outside the pill (the _clipExpansion zone) get
+        //    clamped to the SDF edge, which has near-zero alpha. The
+        //    `geometryData.a < 0.01` early-out below discards them efficiently.
+        geometryUV = clamp(geometryUV, 0.0, 1.0);
+        geometryData = texture(uGeometryTexture, geometryUV);
+    }
 
-    vec4 geometryData = texture(uGeometryTexture, geometryUV);
+    // 中文说明：面积高光的空间曲线只依赖玻璃局部位置与既有几何高度；颜色
+    // 会在最终合成时复用折射背景样本，不增加纹理读取、uniform 或渲染 Pass。
+    float verticalAreaHighlightExposureLift = getVerticalAreaHighlightExposureLift(
+        glassVerticalPosition,
+        glassLogicalHeight
+    );
+
+    // 中文说明：0.36 / 0.18 logical px 先换成名义物理宽度；不足一物理像素
+    // 时 profile.x 扩为 1px，profile.y 同比降低能量。随后只对 SDF/geometry
+    // 边缘数据做八点采样，背景折射、色散与光照纹理读取维持原数量。
+    const float lightRimLogicalWidth = 0.36;
+    const float darkRimLogicalWidth = 0.18;
+    vec2 lightRimProfile = getEnergyPreservingRimProfile(
+        lightRimLogicalWidth * dpr
+    );
+    vec2 darkRimProfile = getEnergyPreservingRimProfile(
+        darkRimLogicalWidth * dpr
+    );
+    vec3 supersampledEdge;
+    float centerRimDistance = rimDistanceFromGeometry(
+        geometryData,
+        uThickness
+    );
+    float conservativeEdgeReach =
+        max(lightRimProfile.x, darkRimProfile.x) * 4.0 + 1.0;
+    if (geometryData.a >= 0.999 && centerRimDistance > conservativeEdgeReach) {
+        // 中文说明：中心已经完全覆盖且离终止边足够远时，任何 RGSS 子样本都
+        // 不可能进入一像素描边。内部区域直接返回满 alpha/零描边，八次几何
+        // 读取或 SDF 计算因此只发生在形状外沿的窄带。
+        supersampledEdge = vec3(1.0, 0.0, 0.0);
+    } else {
+        vec3 edgeSampleSum;
+        if (uAnalyticRect.w > 0.5) {
+            edgeSampleSum =
+                  sampleAnalyticEdgeAtOffset(kEdgeRgss0, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss1, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss2, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss3, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss4, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss5, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss6, fragCoord, lightRimProfile, darkRimProfile)
+                + sampleAnalyticEdgeAtOffset(kEdgeRgss7, fragCoord, lightRimProfile, darkRimProfile);
+        } else {
+            edgeSampleSum =
+                  sampleTextureEdgeAtOffset(kEdgeRgss0, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss1, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss2, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss3, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss4, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss5, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss6, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile)
+                + sampleTextureEdgeAtOffset(kEdgeRgss7, fragCoord, uThickness, dpr, lightRimProfile, darkRimProfile);
+        }
+        supersampledEdge = resolveEdgeSupersample(edgeSampleSum);
+    }
+    geometryData.a = supersampledEdge.x;
+    float continuousLightRimMask = supersampledEdge.y;
+    float lateralDarkRimMask = supersampledEdge.z;
 
     #if DEBUG_GEOMETRY
         fragColor = geometryData;
@@ -228,7 +531,13 @@ void main() {
     // normalize(displacement) as a proxy for the normal — which diverges
     // from the true normal in blend-group neck zones (smooth-union joins).
     // The true normal is now decoded and used for both refraction and lighting.
-    vec2 normalXY = decodeNormalXY(geometryData);
+    // 中文说明：外侧 RGSS 可能检测到少量覆盖，而中心几何样本仍完全透明；
+    // 这时中心 RG 的透明黑不是有效法线。显式归零可保证只输出覆盖率，不会
+    // 在玻璃外侧凭空产生折射、色散或镜面亮点。
+    vec2 localNormalXY = geometryData.a > 0.0 && geometryData.b > 0.0
+        ? decodeNormalXY(geometryData)
+        : vec2(0.0);
+    vec2 normalXY = geometryNormalToScreen(localNormalXY);
     float normalZSq = max(0.0, 1.0 - dot(normalXY, normalXY));
     float normalZ   = sqrt(normalZSq);
     vec3  normal    = vec3(normalXY, normalZ);   // unit-length surface normal
@@ -445,6 +754,48 @@ void main() {
     float edgeThreshold    = mix(0.8, 0.5, 1.0 / thicknessScale);
     float edgeFactor       = uThickness < 0.01 ? 0.0 : 1.0 - smoothstep(0.0, edgeThreshold, normalizedHeight);
 
+    // 中文说明：rimDist 是从 SDF 外轮廓向玻璃内部量取的物理像素距离。
+    // 双层描边已经在 geometryData 读取后由八个 RGSS 样本完成；这里仅重建
+    // 中心样本的有效浅边宽度，供白色高光避让继续使用同一终止边内侧位置。
+    float cosTerm = sqrt(max(0.0, 1.0 - normalizedHeight * normalizedHeight));
+    float rimDist = uThickness * (1.0 - cosTerm);
+    float normalLength2D = max(length(normalXY), 1e-4);
+    vec2 rimN = normalXY / normalLength2D;
+    float localNormalLength2D = max(length(localNormalXY), 1e-4);
+    vec2 localRimN = localNormalXY / localNormalLength2D;
+    // 中文说明：uAnalyticInverseX/Y 的 xy 分量是屏幕物理像素到本地逻辑
+    // 坐标的雅可比行。将本地 SDF 法线左乘该雅可比后，L1 投影负责方形
+    // 像素的 AA 足迹，L2 长度负责把目标屏幕线宽换成 rimDist 单位；两者
+    // 都乘回 DPR，是因为 rimDist 使用物理像素尺度。横纵拉伸或圆弧转向时，
+    // 抗锯齿与几何线宽会分别保持正确，不再互相放大误差。
+    vec2 rimScreenGradient = vec2(
+        localRimN.x * uAnalyticInverseX.x + localRimN.y * uAnalyticInverseY.x,
+        localRimN.x * uAnalyticInverseX.y + localRimN.y * uAnalyticInverseY.y
+    );
+    float analyticRimDistanceScale =
+        getSdfDistanceScale(rimScreenGradient) * dpr;
+    float analyticRimPixelFootprint =
+        getSdfPixelFootprint(rimScreenGradient) * dpr;
+    float rimDistanceScale = mix(
+        1.0,
+        analyticRimDistanceScale,
+        step(0.5, uAnalyticInverseX.w)
+    );
+    float rimPixelFootprint = mix(
+        1.0,
+        analyticRimPixelFootprint,
+        step(0.5, uAnalyticInverseX.w)
+    );
+    float lightRimWidth = lightRimProfile.x * rimDistanceScale;
+    float darkRimWidth = darkRimProfile.x * rimDistanceScale;
+    // 中文说明：continuousLightRimMask / lateralDarkRimMask 已包含八点覆盖率
+    // 与名义能量补偿，不能再调用单样本 outer-minus-inner，否则会重复滤波。
+    float innerHighlightGate = getInnerHighlightGate(
+        rimDist,
+        lightRimWidth,
+        uEdgeConfig.w
+    );
+
     // VQ5: Meniscus darkening — three physics improvements.
     //
     // [1] HEMISPHERE LENS PROFILE
@@ -480,8 +831,6 @@ void main() {
     float rimThickness = 1.0 - lensThickness; // 0 interior → 1 rim
 
     // [2] Light-modulated strength
-    float len2D = max(length(normalXY), 1e-4);
-    vec2  rimN  = normalXY / len2D; // safe normalized 2D rim normal
     float litness   = dot(rimN, uLightDirection); // [-1, +1]
     float dirScale  = mix(1.4, 0.6, litness * 0.5 + 0.5);
 
@@ -510,6 +859,10 @@ void main() {
         // beyond highlightColor.
         float brightnessRaw = (directional + ambient) * edgeFactor * thicknessScale * 0.8;
         float brightness    = brightnessRaw / (1.0 + brightnessRaw);
+
+        // 中文说明：镜面白光避开最外终止边，并在内侧约 2px 内平滑恢复，
+        // 防止后绘制的高光重新把灰黑边覆盖成白色描边。
+        brightness *= innerHighlightGate;
 
         vec3 highlightColor = getHighlightColor(refractColor.rgb, 1.0);
         finalColor.rgb = mix(finalColor.rgb, highlightColor, brightness);
@@ -543,53 +896,53 @@ void main() {
     // At uEdgeConfig.x = 0 rendering is exactly stock.
     // At uEdgeConfig.x = 2 the rim is noticeably thicker.
     // At uEdgeConfig.x = 3 the rim is very prominent.
-    float cosTerm = sqrt(max(0.0, 1.0 - normalizedHeight * normalizedHeight));
-    float rimDist = uThickness * (1.0 - cosTerm);
-    
     // Scale the anti-aliasing window by the same DPR scale applied to the thickness,
     // so the edge remains perfectly sharp (and exactly the same logical width) across all screens.
     float ringWindow = 0.75 * max(0.1, uEdgeConfig.z);
     
     float ring    = (1.0 - smoothstep(uEdgeConfig.x - ringWindow, uEdgeConfig.x + ringWindow, rimDist))
                   * step(0.001, uEdgeConfig.x);
-    float fresnel = rimBase * 0.12 * uEdgeConfig.y + ring * 0.45;
+    // 中文说明：Fresnel 和额外 ring 都属于白色反射，同样只允许出现在
+    // 终止暗边的内侧，避免最外轮廓在最终合成阶段重新发亮。
+    float fresnel = (rimBase * 0.12 * uEdgeConfig.y + ring * 0.45)
+                  * innerHighlightGate;
     finalColor.rgb = clamp(finalColor.rgb + vec3(fresnel), 0.0, 1.0);
 
-    // sortd patch: PASSTHROUGH mode, for glass over a platform view.
-    //
-    // Stock, the body is opaque over its whole shape. Over a platform view
-    // (a map, camera preview, video, webview) the backdrop texture holds
-    // nothing, so the body resolved to opaque BLACK - the black pill.
-    //
-    // The tab bar's own answer over a platform view is to refract its ICON
-    // LAYER instead of the uncapturable backdrop. That is why simply making
-    // the body transparent is not enough: the icon layer is also drawn
-    // directly, so a see-through body reveals the crisp copy next to the
-    // refracted one, i.e. doubled labels. The opaque body was hiding it.
-    //
-    // In passthrough the body is therefore dropped entirely and only the
-    // rim and its highlights are drawn. What shows inside the shape is the
-    // real content beneath, at its own crisp scale, over the live platform
-    // view - no black, no invented fill colour, and nothing drawn twice.
-    //
+    // 中文说明：复用已经去预乘的折射背景，让顶部/底部肩部按背景逐通道
+    // 最多消耗剩余亮度空间的 35% / 20%；峰值核心才会把增益提升到 1.0，并用
+    // 宽 smoothstep 保留接近旧版 2dp 的可见范围，
+    // 因而白底端点更白而不形成死白平台，背景纹理与色相仍会保留。区域高光
+    // 先补亮内部，随后灰黑双层边再覆盖最外轮廓。
+    finalColor.rgb = applyVerticalAreaHighlight(
+        finalColor.rgb,
+        refractColor.rgb,
+        verticalAreaHighlightExposureLift,
+        1.0
+    );
+
+    // 中文说明：最后先铺完整浅灰环，再叠加只由 abs(localRimN.x) 控制的
+    // 几何局部左右深灰边；因此整个底栏旋转后，深边会和主体一起转动，而不是
+    // 固定在屏幕左右。顺序晚于镜面高光与 Fresnel，不会再被白色反射覆盖。
+    finalColor.rgb = applyDualLayerRim(
+        finalColor.rgb,
+        continuousLightRimMask,
+        lateralDarkRimMask,
+        uEdgeConfig.w
+    );
+
+    float alpha  = geometryData.a;
+
+    // 中文说明：保留上游 v1.3.0 的 PlatformView 透传修复，并在 Poiesis
+    // 结构边完成后调整覆盖率；这样既不会恢复黑色胶囊，也不会丢失定制边缘。
     bool passthrough = uPlatformViewMode > 0.5;
-    float alpha = geometryData.a;
     if (passthrough) {
-        // Body coverage follows what was actually sampled: opaque where the
-        // refracted content is real, clear where the backdrop held nothing,
-        // so the platform view shows through instead of resolving to black.
-        // The rim keeps its own coverage so the edge still reads.
-        // The doubling this used to cause is handled above the shader: the
-        // content under the shape is not drawn there at all (see
-        // SearchableTabIndicator.passthroughOverPlatformView).
         float rim = clamp(fresnel * 3.0, 0.0, 1.0);
         alpha *= max(refractColor.a, rim);
-        // Over an empty backdrop the body contributes no colour, so the edge
-        // would resolve to a flat grey band. Glass edges read as SPECULAR:
-        // push the rim toward white in proportion to its own strength, so
-        // the droplet keeps a lit, reflective edge over the platform view.
-        finalColor.rgb = mix(finalColor.rgb, vec3(1.0),
-                             rim * (1.0 - refractColor.a) * 0.85);
+        finalColor.rgb = mix(
+            finalColor.rgb,
+            vec3(1.0),
+            rim * (1.0 - refractColor.a) * 0.85
+        );
     }
     fragColor    = vec4(finalColor.rgb * alpha, alpha);
 }

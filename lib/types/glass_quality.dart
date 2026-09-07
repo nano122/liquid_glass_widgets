@@ -81,7 +81,8 @@ enum GlassQuality {
 extension GlassQualityExtension on GlassQuality {
   /// Whether to use the lightweight fragment shader.
   ///
-  /// - [GlassQuality.standard]  → true  (lightweight shader)
+  /// - [GlassQuality.standard]  → true  (lightweight shader on Skia/Web;
+  ///   native root shader on Impeller)
   /// - [GlassQuality.premium]   → false (full LiquidGlass shader pipeline)
   /// - [GlassQuality.minimal]   → false (no shader at all — BackdropFilter only)
   bool get usesLightweightShader {
@@ -96,7 +97,8 @@ extension GlassQualityExtension on GlassQuality {
 
   /// Whether this quality level uses any custom fragment shader.
   ///
-  /// - [GlassQuality.standard]  → true  (lightweight shader)
+  /// - [GlassQuality.standard]  → true  (lightweight shader on Skia/Web;
+  ///   native root shader on Impeller)
   /// - [GlassQuality.premium]   → true  (full LiquidGlass shader)
   /// - [GlassQuality.minimal]   → false (BackdropFilter only, zero shaders)
   bool get usesAnyShader {

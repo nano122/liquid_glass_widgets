@@ -296,13 +296,8 @@ class _GlassToastState extends State<GlassToast> {
             color: semanticColor.withValues(alpha: 0.2),
             width: 1,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: semanticColor.withValues(alpha: 0.15),
-              blurRadius: 20,
-              spreadRadius: 2,
-            ),
-          ],
+          // 中文说明：Toast 本体已由 AdaptiveLiquidGlassLayer 提供材质，
+          // 当前玻璃策略不再额外向外投射彩色阴影；状态色仍由图标和描边表达。
         ),
         padding: EdgeInsets.symmetric(
           horizontal: 16,

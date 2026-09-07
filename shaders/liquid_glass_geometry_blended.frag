@@ -78,23 +78,24 @@ void main() {
     // (like our continuous superellipse) into a true Euclidean distance metric.
     float sdN = (gradMag > 0.1) ? sd / gradMag : sd;
 
-    // Apply logical-pixel anti-aliasing using the NORMALIZED distance (sdN).
-    // Using raw `sd` for pseudo-SDFs causes pixelated edges because the field
-    // crosses zero too quickly. `sdN` guarantees exact 1-pixel wide gradients.
-    // 
-    // Note: The physical radius here scales directly by raw `uDpr`, not by `uDpr / 3.0`.
-    // This is correct because we want a 1.5 logical-pixel wide smoothing radius on all
-    // screens. A 1.5 logical-pixel radius naturally maps to `1.5 * uDpr` physical pixels.
-    // This guarantees a pristine edge that survives the 4% bilinear scaling of press 
-    // animations without stair-stepping, on every device density.
-    float smoothing = 1.5 * max(1.0, uDpr);
-    float foregroundAlpha = smoothstep(smoothing * 0.5, -smoothing * 0.5, sdN);
-    if (foregroundAlpha < 0.01) {
+    // 中文说明：sdN 已经是几何纹理中的物理像素有符号距离。这里直接使用
+    // 一物理像素宽的线性面积覆盖率，而不是跨 1.5 logical px 的 smoothstep；
+    // 线性 coverage 与最终描边的 outer-minus-inner 算法满足面积守恒，因此
+    // 轮廓落在像素中心或两行像素之间时，累计深浅与视觉线宽都保持一致。
+    float foregroundAlpha = clamp(0.5 - sdN, 0.0, 1.0);
+    if (foregroundAlpha < 0.01 || uThickness <= 0.0) {
         fragColor = vec4(0.0);
         return;
     }
 
-    float n_cos = max(uThickness + sdN, 0.0) / uThickness;
+    // 中文说明：保留 SDF 外侧半个物理像素的 AA 样本，但光学曲面不能越过
+    // 真实边界。钳制后的距离只用于法线与高度，外侧样本只贡献覆盖率。
+    float opticalSdN = min(sdN, 0.0);
+    float n_cos = clamp(
+        (uThickness + opticalSdN) / uThickness,
+        0.0,
+        1.0
+    );
     float n_sin = sqrt(max(0.0, 1.0 - n_cos * n_cos));
 
     // True surface normal from the SDF gradient — this is what we store.
@@ -102,14 +103,13 @@ void main() {
     // normal, which is why storing the normal (not displacement) fixes lighting.
     vec3 normal = normalize(vec3(dx * n_cos, dy * n_cos, n_sin));
 
-    if (sd >= 0.0 || uThickness <= 0.0) {
-        fragColor = vec4(0.0);
-        return;
-    }
-
-    float x = uThickness + sdN;
+    float x = uThickness + opticalSdN;
     float sqrtTerm = sqrt(max(0.0, uThickness * uThickness - x * x));
-    float height = mix(sqrtTerm, uThickness, float(sdN < -uThickness));
+    float height = mix(
+        sqrtTerm,
+        uThickness,
+        float(opticalSdN < -uThickness)
+    );
 
     // Encode normal.xy + height + alpha.
     // The render pass recomputes displacement = refract(incident, normal, 1/n)

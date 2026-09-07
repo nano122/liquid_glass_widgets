@@ -370,6 +370,59 @@ class GlassAdaptiveScopeConfig {
 }
 
 // ---------------------------------------------------------------------------
+// GlassQualityCeilingScope — lightweight fixed ceiling
+// ---------------------------------------------------------------------------
+
+/// Applies a fixed [maxQuality] ceiling to a subtree without registering a
+/// frame-timing benchmark.
+///
+/// 中文说明：路由转场等短暂阶段只需要立即降低 Shader 档位，不需要重新启动
+/// 180 帧基准测试或运行时迟滞监控。该 Scope 会继续尊重外层更低的质量上限，
+/// 因此绝不会把用户选择的省电档抬高；移除或提高本层上限后，子树立即恢复外层
+/// 档位，适合动画生命周期内的确定性降载。
+class GlassQualityCeilingScope extends StatelessWidget {
+  const GlassQualityCeilingScope({
+    required this.maxQuality,
+    required this.child,
+    super.key,
+  });
+
+  final GlassQuality maxQuality;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final parent = GlassAdaptiveScopeData.maybeOf(context);
+    final effectiveQuality = _lowerQuality(
+      parent?.effectiveQuality ?? maxQuality,
+      maxQuality,
+    );
+    return _InheritedAdaptiveQuality(
+      data: GlassAdaptiveScopeData(
+        effectiveQuality: effectiveQuality,
+        // 中文说明：固定上限不创建自己的性能阶段；有外层自适应 Scope 时保留其
+        // 诊断阶段，否则使用 runtime 表示当前值已经稳定可用。
+        phase: parent?.phase ?? AdaptivePhase.runtime,
+      ),
+      child: child,
+    );
+  }
+}
+
+/// 中文说明：GlassQuality 的枚举声明顺序不是性能从低到高，不能依赖 index
+/// 比较。这里显式表达 minimal < standard < premium，避免未来整理枚举顺序时
+/// 静默把“上限”变成升档。
+GlassQuality _lowerQuality(GlassQuality first, GlassQuality second) {
+  if (first == GlassQuality.minimal || second == GlassQuality.minimal) {
+    return GlassQuality.minimal;
+  }
+  if (first == GlassQuality.standard || second == GlassQuality.standard) {
+    return GlassQuality.standard;
+  }
+  return GlassQuality.premium;
+}
+
+// ---------------------------------------------------------------------------
 // GlassAdaptiveScope — public widget
 // ---------------------------------------------------------------------------
 

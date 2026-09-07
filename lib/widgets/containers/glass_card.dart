@@ -194,8 +194,9 @@ class GlassCard extends StatelessWidget {
   /// Rendering quality for the glass effect.
   ///
   /// If null, inherits from parent [InheritedLiquidGlass] or defaults to
-  /// [GlassQuality.standard], which uses the lightweight fragment shader.
-  /// This works reliably in all contexts, including scrollable lists.
+  /// [GlassQuality.standard], which uses the native full glass layer on
+  /// Impeller and the lightweight fragment shader on Skia/Web. This works
+  /// reliably in all contexts, including scrollable lists.
   ///
   /// Use [GlassQuality.premium] for full-pipeline shader with texture capture
   /// and chromatic aberration (Impeller only) in static layouts.

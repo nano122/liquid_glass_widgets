@@ -39,6 +39,7 @@ class LiquidGlass extends StatelessWidget {
   })  : grouped = false,
         blendGroupLink = null,
         clipExpansion = EdgeInsets.zero,
+        preferAnalyticRoundedRectangle = false,
         shadows = const <BoxShadow>[],
         ownLayerConfig = null,
         _captureImage = null,
@@ -58,6 +59,7 @@ class LiquidGlass extends StatelessWidget {
     this.blendGroupLink,
   })  : ownLayerConfig = null,
         clipExpansion = EdgeInsets.zero,
+        preferAnalyticRoundedRectangle = false,
         shadows = const <BoxShadow>[],
         _captureImage = null,
         _captureOriginInScreenSpace = Offset.zero,
@@ -80,6 +82,7 @@ class LiquidGlass extends StatelessWidget {
     this.clipBehavior = Clip.hardEdge,
     this.blendGroupLink,
     this.clipExpansion = EdgeInsets.zero,
+    this.preferAnalyticRoundedRectangle = false,
     ui.Image? captureImage,
     Offset captureOriginInScreenSpace = Offset.zero,
   })  : ownLayerConfig = settings,
@@ -131,6 +134,13 @@ class LiquidGlass extends StatelessWidget {
   /// the grouped or default constructors.
   final EdgeInsets clipExpansion;
 
+  /// 是否允许独立层为单个 [LiquidRoundedRectangle] 使用解析式几何。
+  ///
+  /// 中文说明：启用后仍由 [LiquidGlassLayer] 的官方 BackdropFilter 合成链读取
+  /// 实时背景，只跳过中间 geometry texture；若形状、变换或捕获模式不满足条件，
+  /// 渲染器会自动留在原有纹理几何路径，不近似其他轮廓。
+  final bool preferAnalyticRoundedRectangle;
+
   // Capture-path fields — only set by LiquidGlass.withOwnLayer.
   // When non-null, LiquidGlassLayer bypasses its BackdropFilterLayer and
   // feeds this image directly to the shader as uBackgroundTexture.
@@ -145,6 +155,7 @@ class LiquidGlass extends StatelessWidget {
         settings: settings,
         shadows: shadows,
         clipExpansion: clipExpansion,
+        preferAnalyticRoundedRectangle: preferAnalyticRoundedRectangle,
         captureImage: _captureImage,
         captureOriginInScreenSpace: _captureOriginInScreenSpace,
         child: LiquidGlassBlendGroup(

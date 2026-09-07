@@ -326,13 +326,8 @@ class GlassBadge extends StatelessWidget {
             color: CupertinoColors.white.withValues(alpha: 0.3),
             width: 1.5,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: bgColor.withValues(alpha: 0.4),
-              blurRadius: 8,
-              spreadRadius: 1,
-            ),
-          ],
+          // 中文说明：Badge 仍保留玻璃材质、状态色和细边，但不再额外绘制
+          // 向外扩散的 BoxShadow，避免小组件周围出现彩色投影脏边。
         ),
         child: Text(
           displayText,
@@ -371,13 +366,7 @@ class GlassBadge extends StatelessWidget {
             color: CupertinoColors.white,
             width: 2,
           ),
-          boxShadow: [
-            BoxShadow(
-              color: color.withValues(alpha: 0.5),
-              blurRadius: 6,
-              spreadRadius: 1,
-            ),
-          ],
+          // 中文说明：状态点使用纯色和白色边界表达状态，不创建外投影。
         ),
       ),
     );

@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
+
 import '../../src/renderer/internal/transform_tracking_repaint_boundary_mixin.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 import '../../src/renderer/glass_backdrop_kernel.dart';
@@ -290,7 +291,8 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
 
     // Only re-capture when geometry changes or on first capture.
     // toImageSync is synchronous and stays in GPU memory — cheap but not free.
-    final bool needsCapture = _backgroundImage == null ||
+    final bool needsCapture =
+        _backgroundImage == null ||
         _lastCaptureSize != currentSize ||
         _lastCapturePosition != currentPos;
 
@@ -323,26 +325,32 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
   /// The [_capturePending] flag prevents concurrent captures from stacking up
   /// when the ticker fires multiple times before the first capture completes.
   void _captureBackground(
-      RenderRepaintBoundary boundary, Size size, Offset pos) {
+    RenderRepaintBoundary boundary,
+    Size size,
+    Offset pos,
+  ) {
     if (_capturePending) return; // Already capturing — wait for it to finish.
     _capturePending = true;
-    boundary.toImage(pixelRatio: 1.0).then((image) {
-      if (!mounted || _isDisposed) {
-        image.dispose();
-        _capturePending = false;
-        return;
-      }
-      _backgroundImage?.dispose();
-      _backgroundImage = image;
-      _lastCaptureSize = size;
-      _lastCapturePosition = pos;
-      _capturePending = false;
-      setState(() {});
-    }).catchError((_) {
-      // toImage can fail transiently (e.g. widget detached mid-capture).
-      // Clear the flag so the ticker will retry on the next frame.
-      _capturePending = false;
-    });
+    boundary
+        .toImage(pixelRatio: 1.0)
+        .then((image) {
+          if (!mounted || _isDisposed) {
+            image.dispose();
+            _capturePending = false;
+            return;
+          }
+          _backgroundImage?.dispose();
+          _backgroundImage = image;
+          _lastCaptureSize = size;
+          _lastCapturePosition = pos;
+          _capturePending = false;
+          setState(() {});
+        })
+        .catchError((_) {
+          // toImage can fail transiently (e.g. widget detached mid-capture).
+          // Clear the flag so the ticker will retry on the next frame.
+          _capturePending = false;
+        });
   }
 
   @override
@@ -403,7 +411,8 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
           _webShader = LightweightLiquidGlass._cachedProgram!.fragmentShader();
           if (!_loggedCreation) {
             debugPrint(
-                '[LightweightGlass] ✓ Created web shader for ${widget.shape.runtimeType}');
+              '[LightweightGlass] ✓ Created web shader for ${widget.shape.runtimeType}',
+            );
             _loggedCreation = true;
           }
         });
@@ -435,14 +444,15 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
 
   @override
   Widget build(BuildContext context) {
-    final inherited =
-        context.dependOnInheritedWidgetOfExactType<InheritedLiquidGlass>();
+    final inherited = context
+        .dependOnInheritedWidgetOfExactType<InheritedLiquidGlass>();
     final settings =
         widget.settings ?? inherited?.settings ?? const LiquidGlassSettings();
     final shader = _activeShader;
 
     // Optimization: Skip local blur if provided by ancestor and settings match
-    final bool skipBlur = (inherited?.isBlurProvidedByAncestor ?? false) &&
+    final bool skipBlur =
+        (inherited?.isBlurProvidedByAncestor ?? false) &&
         (widget.settings == null ||
             widget.settings?.blur == inherited?.settings.blur);
 
@@ -504,14 +514,14 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
 
     final BorderRadius? roundedRectRadius =
         (clipShape is RoundedRectangleBorder &&
-                clipShape.borderRadius is BorderRadius)
-            ? clipShape.borderRadius as BorderRadius
-            : null;
+            clipShape.borderRadius is BorderRadius)
+        ? clipShape.borderRadius as BorderRadius
+        : null;
     final BorderRadius? superellipseRadius =
         (clipShape is RoundedSuperellipseBorder &&
-                clipShape.borderRadius is BorderRadius)
-            ? clipShape.borderRadius as BorderRadius
-            : null;
+            clipShape.borderRadius is BorderRadius)
+        ? clipShape.borderRadius as BorderRadius
+        : null;
     final Widget effect = _LightweightGlassEffect(
       shader: shader,
       settings: settings,
@@ -521,6 +531,7 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
       densityFactor: widget.densityFactor,
       indicatorWeight: widget.indicatorWeight,
       backdropLuma: backdropLuma,
+      devicePixelRatio: View.of(context).devicePixelRatio,
       backgroundImage: _backgroundImage,
       backgroundKey: widget.backgroundKey,
       child: widget.child,
@@ -548,6 +559,7 @@ class _LightweightGlassEffect extends SingleChildRenderObjectWidget {
     required this.densityFactor,
     required this.indicatorWeight,
     required this.backdropLuma,
+    required this.devicePixelRatio,
     this.backgroundImage,
     this.backgroundKey,
     required super.child,
@@ -561,6 +573,7 @@ class _LightweightGlassEffect extends SingleChildRenderObjectWidget {
   final double densityFactor;
   final double indicatorWeight;
   final double backdropLuma;
+  final double devicePixelRatio;
   final ui.Image? backgroundImage;
   final GlobalKey? backgroundKey;
 
@@ -575,6 +588,7 @@ class _LightweightGlassEffect extends SingleChildRenderObjectWidget {
       densityFactor: densityFactor,
       indicatorWeight: indicatorWeight,
       backdropLuma: backdropLuma,
+      devicePixelRatio: devicePixelRatio,
       backgroundImage: backgroundImage,
       backgroundKey: backgroundKey,
     );
@@ -594,6 +608,7 @@ class _LightweightGlassEffect extends SingleChildRenderObjectWidget {
       ..densityFactor = densityFactor
       ..indicatorWeight = indicatorWeight
       ..backdropLuma = backdropLuma
+      ..devicePixelRatio = devicePixelRatio
       ..backgroundImage = backgroundImage
       ..backgroundKey = backgroundKey;
   }
@@ -610,20 +625,22 @@ class _RenderLightweightGlass extends RenderProxyBox
     required double densityFactor,
     required double indicatorWeight,
     required double backdropLuma,
+    required double devicePixelRatio,
     ui.Image? backgroundImage,
     GlobalKey? backgroundKey,
-  })  : _shader = shader,
-        _settings = settings,
-        _shape = shape,
-        _skipBlur = skipBlur,
-        _glowIntensity = glowIntensity,
-        _densityFactor = densityFactor,
-        _indicatorWeight = indicatorWeight,
-        _backdropLuma = backdropLuma,
-        _backgroundImage = backgroundImage,
-        _backgroundKey = backgroundKey,
-        _cachedLightCos = math.cos(settings.lightAngle),
-        _cachedLightSin = -math.sin(settings.lightAngle);
+  }) : _shader = shader,
+       _settings = settings,
+       _shape = shape,
+       _skipBlur = skipBlur,
+       _glowIntensity = glowIntensity,
+       _densityFactor = densityFactor,
+       _indicatorWeight = indicatorWeight,
+       _backdropLuma = backdropLuma,
+       _devicePixelRatio = devicePixelRatio,
+       _backgroundImage = backgroundImage,
+       _backgroundKey = backgroundKey,
+       _cachedLightCos = math.cos(settings.lightAngle),
+       _cachedLightSin = -math.sin(settings.lightAngle);
 
   @override
   void onTransformChanged() {
@@ -718,6 +735,16 @@ class _RenderLightweightGlass extends RenderProxyBox
     markNeedsPaint();
   }
 
+  double _devicePixelRatio;
+  double get devicePixelRatio => _devicePixelRatio;
+  set devicePixelRatio(double value) {
+    if (_devicePixelRatio == value) return;
+    // 中文说明：DPR 与 uScale 分开保存。uScale 会随 jelly/祖先 Transform
+    // 改变，只有纯 DPR 才能定义 0.36 / 0.18 logical px 的恒定屏幕目标宽度。
+    _devicePixelRatio = value;
+    markNeedsPaint();
+  }
+
   ui.Image? _backgroundImage;
   set backgroundImage(ui.Image? value) {
     if (_backgroundImage == value) return;
@@ -738,11 +765,8 @@ class _RenderLightweightGlass extends RenderProxyBox
   double _cachedLightCos;
   double _cachedLightSin;
 
-  // Standard 的 BackdropFilterLayer 由 RenderObject 持有并跨帧复用。
-  // Flutter 会把旧 engineLayer 交还给 Impeller，避免每次 repaint 都重建
-  // GPU backdrop 节点；当本帧不需要模糊时则主动释放引用。
-  @override
-  BackdropFilterLayer? get layer => super.layer as BackdropFilterLayer?;
+  // 中文说明：滤镜对象由 GlassBackdropKernel 跨组件缓存；这里仅持有可跨帧
+  // 复用的 engine layer，避免重复缓存同一份 blur/saturation 组合。
 
   // Only force compositing when we actually push a BackdropFilterLayer
   // (shader available AND blur > 0 AND not skipped by ancestor blur).
@@ -752,6 +776,16 @@ class _RenderLightweightGlass extends RenderProxyBox
   @override
   bool get alwaysNeedsCompositing =>
       _shader != null && !_skipBlur && _settings.effectiveBlur > 0;
+
+  // 中文说明：保留 BackdropFilterLayer 让 Flutter/Impeller 在 Standard
+  // 滚动与动画重绘时复用同一个合成层；LayerHandle 同时负责引用计数和释放。
+  final _backdropFilterLayerHandle = LayerHandle<BackdropFilterLayer>();
+
+  @override
+  void dispose() {
+    _backdropFilterLayerHandle.layer = null;
+    super.dispose();
+  }
 
   @override
   void paint(PaintingContext context, Offset offset) {
@@ -781,21 +815,21 @@ class _RenderLightweightGlass extends RenderProxyBox
         saturation: _settings.effectiveSaturation,
       );
 
-      layer ??= BackdropFilterLayer();
-      layer!.filter = filter;
+      final backdropLayer =
+          (_backdropFilterLayerHandle.layer ??= BackdropFilterLayer())
+            ..filter = filter;
       context.pushLayer(
-        layer!,
+        backdropLayer,
         (context, offset) {
           _paintGlassContent(context, offset);
         },
         offset,
-        // 明确告诉子 PaintingContext 玻璃的真实输出范围，避免默认继承父级
-        // （概要页通常是整屏）估算边界。该参数不裁剪高斯采样，视觉不变；
-        // 外层现有的形状 Clip 仍负责最终像素边界。
+        // 中文说明：默认 cull bounds 可能扩大到父级绘制区域；玻璃只会在
+        // 自身矩形内绘制，传入紧边界可减少离屏纹理面积和无效合成工作。
         childPaintBounds: offset & size,
       );
     } else {
-      layer = null;
+      _backdropFilterLayerHandle.layer = null;
       _paintGlassContent(context, offset);
     }
   }
@@ -854,8 +888,13 @@ class _RenderLightweightGlass extends RenderProxyBox
     super.paint(context, offset);
   }
 
-  void _updateShaderUniforms(Size size, Offset physicalOrigin,
-      Offset physicalScale, Offset bgOrigin, Size bgSize) {
+  void _updateShaderUniforms(
+    Size size,
+    Offset physicalOrigin,
+    Offset physicalScale,
+    Offset bgOrigin,
+    Size bgSize,
+  ) {
     // _updateShaderUniforms is only ever called from _paintGlassContent,
     // which is only reached when _shader != null (guarded in paint()).
     // The assertion makes the non-nullability explicit for the analyser.
@@ -885,16 +924,21 @@ class _RenderLightweightGlass extends RenderProxyBox
     // also works over platform views, where BackdropFilter color ops don't
     // apply. The gain calibrates the veil so a single whitenStrength value
     // reads close to the Premium path's gated whiten at the same value.
-    final double whitenStrength =
-        _settings.effectiveWhitenStrength.clamp(0.0, 1.0).toDouble();
+    final double whitenStrength = _settings.effectiveWhitenStrength
+        .clamp(0.0, 1.0)
+        .toDouble();
     const double kWhitenVeilGain = 1.5;
-    final double whitenVeil =
-        (whitenStrength * kWhitenVeilGain).clamp(0.0, 1.0).toDouble();
+    final double whitenVeil = (whitenStrength * kWhitenVeilGain)
+        .clamp(0.0, 1.0)
+        .toDouble();
     final color = whitenVeil <= 0.0
         ? _settings.effectiveGlassColor
         // Whitelisted: Used in Color.lerp for glass veil tint math anchor, not a theme color.
-        : Color.lerp(_settings.effectiveGlassColor, const Color(0xFFFFFFFF),
-            whitenVeil)!;
+        : Color.lerp(
+            _settings.effectiveGlassColor,
+            const Color(0xFFFFFFFF),
+            whitenVeil,
+          )!;
     shader.setFloat(index++, (color.r * 255.0).round().clamp(0, 255) / 255.0);
     shader.setFloat(index++, (color.g * 255.0).round().clamp(0, 255) / 255.0);
     shader.setFloat(index++, (color.b * 255.0).round().clamp(0, 255) / 255.0);
@@ -1030,5 +1074,9 @@ class _RenderLightweightGlass extends RenderProxyBox
     // Matches the uniform wired in liquid_glass_final_render.frag via uEdgeConfig.y.
     // Default 1.0 = calibrated iOS 26 baseline (0.10 * adaptiveStrength in shader).
     shader.setFloat(index++, _settings.fresnelStrength.clamp(0.0, 4.0));
+
+    // 34: uDpr — 仅用于把描边 logical px 目标换算为屏幕物理像素；不能
+    // 复用 physicalScale，因为后者还包含横纵不同的 jelly/祖先变换。
+    shader.setFloat(index++, _devicePixelRatio);
   }
 }

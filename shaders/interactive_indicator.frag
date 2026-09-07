@@ -6,6 +6,11 @@
 // indicators (segmented controls, pills). Fully original implementation.
 
 #include <flutter/runtime_effect.glsl>
+// 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
+// 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
+// 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
+  // POIESIS_EDGE_TREATMENT_ADLER32: c288c981
+#include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
 precision highp float;
@@ -45,8 +50,10 @@ uniform vec4 uData4; // 16..19 (cornerRadius, scale.x, scale.y, glowIntensity)
 uniform vec4 uData5; // 20..23 (densityFactor, interactionIntensity, bgOrigin.x, bgOrigin.y)
 uniform vec4 uData6; // 24..27 (bgSize.width, bgSize.height, hasBackground, ambientRim)
 uniform vec4 uData7; // 28..31 (baseAlphaMultiplier, edgeAlphaMultiplier, rimThickness, rimSmoothing)
-// 32:  uDpr (float)  — device pixel ratio for textureBilinear()
+// 32:  uDpr (float)  — device pixel ratio for hardware-filtered sampling
 // 33:  uEdgeAbsorption — Beer-Lambert meniscus rim darkening strength [0..1]
+// 34:  uPinchStrength — animated concave lens pinch [0..1]
+// 35:  uVisibility — glass fade, kept separate from transparent tint colours
 
 uniform sampler2D uTexture;         // Captured background image
 
@@ -56,58 +63,88 @@ uniform sampler2D uTexture;         // Captured background image
 uniform float uDpr;
 
 // 33: Meniscus rim darkening — Beer-Lambert absorption at the pill boundary.
-// Applied before specular highlights (physical ordering: light is absorbed
-// first, then reflected). Same formula as liquid_glass_final_render.frag.
+// 广域弯月面吸收先作用于玻璃体；最外终止暗边会在所有镜面光之后再次合成，
+// 让外轮廓保持灰黑、白色反射停留在内侧。公式与另外两条路径共用。
 // Range: 0.0 (flat, no absorption) → 1.0 (fully dark rim).
 // iOS 26 reference calibrated at ~0.15.
 uniform float uEdgeAbsorption;
 
+// 34: Concave horizontal-pinch strength driven by AnimatedGlassIndicator.
+uniform float uPinchStrength;
+
+// 35: Explicit visibility. The default indicator tint can be fully transparent,
+// so tint alpha cannot also carry the glass fade without losing the lens body.
+uniform float uVisibility;
+
 out vec4 fragColor;
 
-// ── Manual Bilinear Filtering ─────────────────────────────────────────────
-// Impeller's explicit setImageSampler() binding may also default to
-// Nearest-Neighbor. Even when it does not, the background texture was
-// previously captured at pixelRatio: 1.0, meaning each "texel" covered
-// a 3×3 block of physical pixels on a 3× Retina screen. Both issues
-// produced blocky staircase aliasing on edge refraction and chromatic
-// aberration.
-//
-// This function replaces all uTexture lookups with a 4-texel bilinear
-// interpolation in GLSL, guaranteeing smooth sub-pixel sampling regardless
-// of Impeller's sampler default.
-//
-// uv       — UV coordinate in [0,1] (relative to logical uBackgroundSize)
-// logSize  — uBackgroundSize in logical pixels
-// physSize — uBackgroundSize * uDpr = actual pixel dimensions of the texture
-// invPhys  — 1.0 / physSize (precomputed for efficiency)
-vec4 textureBilinear(vec2 uv, vec2 physSize, vec2 invPhys) {
-    // Convert UV to physical texel coordinate, centre on the texel grid.
-    vec2 px = uv * physSize - 0.5;
-    vec2 f  = fract(px);
-    vec2 p0 = floor(px);
-    vec2 p1 = p0 + vec2(1.0, 0.0);
-    vec2 p2 = p0 + vec2(0.0, 1.0);
-    vec2 p3 = p0 + vec2(1.0, 1.0);
+// ── Hardware Bilinear Filtering ───────────────────────────────────────────
+// 中文说明：这个 Shader 的纹理由 Dart 通过 setImageSampler(...,
+// FilterQuality.medium) 显式绑定，Flutter 3.41+ 已能使用硬件线性采样。旧实现
+// 仍手写四次 texture() 再 mix，导致普通折射 4 次、色散边缘 12 次纹理读取。
+// 保留半 texel clamp 后交给采样器完成线性插值，像素边界语义不变，而采样数
+// 分别降为 1 次和 3 次。Premium 的实时 backdrop 已回到官方最终 Shader。
+vec4 sampleBackground(vec2 uv, vec2 physSize) {
+    vec2 halfTexel = 0.5 / max(physSize, vec2(1.0));
+    return texture(uTexture, clamp(uv, halfTexel, vec2(1.0) - halfTexel));
+}
 
-    // Explicitly clamp to texture bounds. In Impeller, custom FragmentShader 
-    // samplers may not use ClampToEdge by default. When the indicator pill 
-    // expands outside the RepaintBoundary bounds (e.g. via jelly overshoot 
-    // or LiquidStretch scaling), out-of-bounds UVs cause extreme wrap-around 
-    // chromatic aliasing (jagged rainbows) on the pill's top/left edges.
-    vec2 maxPx = max(vec2(0.0), physSize - 1.0);
-    p0 = clamp(p0, vec2(0.0), maxPx);
-    p1 = clamp(p1, vec2(0.0), maxPx);
-    p2 = clamp(p2, vec2(0.0), maxPx);
-    p3 = clamp(p3, vec2(0.0), maxPx);
+vec3 evaluateIndicatorRoundedRectSdfAt(
+    vec2 localPoint,
+    vec2 size,
+    float cornerRadius
+) {
+    vec2 halfSize = size * 0.5;
+    vec2 centered = localPoint - halfSize;
+    vec2 innerHalfSize = halfSize - cornerRadius;
+    vec2 closestOnSkeleton = clamp(
+        centered,
+        -innerHalfSize,
+        innerHalfSize
+    );
+    vec2 toEdge = centered - closestOnSkeleton;
+    float edgeLength = length(toEdge);
+    vec2 q = abs(centered) - halfSize + cornerRadius;
+    float signedDistance =
+        length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - cornerRadius;
+    vec2 normal = edgeLength > 0.001
+        ? toEdge / edgeLength
+        : vec2(0.0);
+    return vec3(signedDistance, normal);
+}
 
-    vec4 c0 = texture(uTexture, (p0 + 0.5) * invPhys);
-    vec4 c1 = texture(uTexture, (p1 + 0.5) * invPhys);
-    vec4 c2 = texture(uTexture, (p2 + 0.5) * invPhys);
-    vec4 c3 = texture(uTexture, (p3 + 0.5) * invPhys);
-
-    vec4 cTop = mix(c0, c1, f.x);
-    vec4 cBot = mix(c2, c3, f.x);
-    return mix(cTop, cBot, f.y);
+vec3 sampleIndicatorEdgeAtOffset(
+    vec2 pixelOffset,
+    vec2 fragPx,
+    vec2 origin,
+    vec2 scale,
+    vec2 size,
+    float cornerRadius,
+    vec2 lightRimProfile,
+    vec2 darkRimProfile
+) {
+    // 中文说明：每个子样本从物理片元坐标重新映射到指示器本地坐标，并独立
+    // 求圆角矩形 SDF 与法线。这样按压/切换动画中的非均匀缩放不会把八点采样
+    // 错误压到同一法线直线上，左右圆弧的覆盖率也不会再随相位突然跳变。
+    vec2 sampleLocal = (fragPx + pixelOffset - origin) / scale;
+    vec3 sampleSdf = evaluateIndicatorRoundedRectSdfAt(
+        sampleLocal,
+        size,
+        cornerRadius
+    );
+    vec2 sampleNormal = sampleSdf.yz;
+    vec2 safeScale = max(abs(scale), vec2(0.0001));
+    float sampleDistanceScale = getSdfDistanceScale(
+        sampleNormal / safeScale
+    );
+    return getSupersampledSdfEdgeContribution(
+        sampleSdf.x,
+        lightRimProfile.x * sampleDistanceScale,
+        darkRimProfile.x * sampleDistanceScale,
+        sampleNormal.x,
+        lightRimProfile.y,
+        darkRimProfile.y
+    );
 }
 
 void main() {
@@ -146,6 +183,17 @@ void main() {
   // Convert to local logical position (0 to uSize)
   // Note: uOrigin is (0,0) and uScale is (1,1) due to layer boundaries
   vec2 localLogical = (fragPx - uOrigin) / uScale;
+  // 中文说明：交互指示器与普通玻璃共用局部逻辑高度。小尺寸使用顶部
+  // 15% / 底部 30%，大尺寸封顶 10dp / 20dp；按压缩放时仍跟随胶囊本体。
+  float glassVerticalPosition = clamp(
+    localLogical.y / max(uSize.y, 0.0001),
+    0.0,
+    1.0
+  );
+  float verticalAreaHighlightExposureLift = getVerticalAreaHighlightExposureLift(
+    glassVerticalPosition,
+    uSize.y
+  );
   vec2 center = uSize * 0.5;
   vec2 normalizedP = (localLogical - center) / center;
   float radialDist = length(normalizedP);  // 0 at center, 1 at edge
@@ -155,33 +203,75 @@ void main() {
   // ==========================================================================
   // Using a standard high-fidelity Rounded Rectangle SDF for lighting stability.
   
-  vec2 halfSize = uSize * 0.5;
-  vec2 q = abs(localLogical - halfSize) - halfSize + uCornerRadius;
-  float dist = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - uCornerRadius;
+  vec3 centerSdf = evaluateIndicatorRoundedRectSdfAt(
+    localLogical,
+    uSize,
+    uCornerRadius
+  );
+  float dist = centerSdf.x;
 
-  // Anti-aliasing: smooth transition at edge
-  float smoothing = 1.0 / uScale.x;
-  float mask = 1.0 - smoothstep(-smoothing, smoothing, dist);
-  
-  // Early exit if outside the shape
-  if (mask <= 0.0) {
-    fragColor = vec4(0.0);
-    return;
-  }
-  
   // ==========================================================================
   // SURFACE NORMAL
   // ==========================================================================
-  vec2 innerHalfSize = halfSize - uCornerRadius;
-  vec2 p = localLogical - halfSize;
-  vec2 closestOnSkeleton = clamp(p, -innerHalfSize, innerHalfSize);
-  vec2 toEdge = p - closestOnSkeleton;
-  float edgeLen = length(toEdge);
-  // Reuse edgeLen for the division — normalize(toEdge) would recompute length()
-  // internally. Dividing by the already-computed scalar saves one length() call
-  // per fragment in the surface normal path.
-  vec2 surfaceNormal = (edgeLen > 0.001) ? (toEdge / edgeLen) : vec2(0.0);
-  
+  // 中文说明：光学效果继续使用中心法线；只有外形 alpha 与双层结构边执行
+  // 八点重建，避免把背景折射和色散纹理读取也放大八倍。
+  vec2 surfaceNormal = centerSdf.yz;
+
+  // 中文说明：外形 alpha 和双层描边共享当前 SDF 屏幕梯度。方形像素的
+  // AA 足迹使用 L1 投影，线宽换算单独使用 L2 长度；这样既补足斜向圆弧
+  // 的覆盖窗口，也不会让 45° 处因抗锯齿变宽而产生新的粗边。
+  vec2 safeRimScale = max(abs(uScale), vec2(0.0001));
+  vec2 rimScreenGradient = surfaceNormal / safeRimScale;
+  float rimDistanceScale = getSdfDistanceScale(rimScreenGradient);
+  float rimPixelFootprint = getSdfPixelFootprint(rimScreenGradient);
+  float smoothing = 1.0 / uScale.x;
+
+  const float lightRimLogicalWidth = 0.36;
+  const float darkRimLogicalWidth = 0.18;
+  float safeDpr = max(uDpr, 1.0);
+  vec2 lightRimProfile = getEnergyPreservingRimProfile(
+    lightRimLogicalWidth * safeDpr
+  );
+  vec2 darkRimProfile = getEnergyPreservingRimProfile(
+    darkRimLogicalWidth * safeDpr
+  );
+  float lightRimWidth = lightRimProfile.x * rimDistanceScale;
+  float darkRimWidth = darkRimProfile.x * rimDistanceScale;
+
+  float centerCoverage = clamp(
+    0.5 - dist / rimPixelFootprint,
+    0.0,
+    1.0
+  );
+  if (centerCoverage <= 0.0) {
+    fragColor = vec4(0.0);
+    return;
+  }
+
+  vec3 supersampledEdge;
+  float centerInwardDistance = max(-dist, 0.0);
+  float edgeSamplingReach = max(lightRimWidth, darkRimWidth)
+      + rimPixelFootprint * 0.5;
+  if (centerCoverage >= 1.0 && centerInwardDistance > edgeSamplingReach) {
+    // 中文说明：八点 SDF 只在终止边窄带执行；完整内部直接使用满覆盖率，
+    // 后续折射与背景采样数量不变，避免高画质边缘影响整块指示器的成本。
+    supersampledEdge = vec3(1.0, 0.0, 0.0);
+  } else {
+    vec3 edgeSampleSum =
+        sampleIndicatorEdgeAtOffset(kEdgeRgss0, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss1, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss2, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss3, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss4, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss5, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss6, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile)
+      + sampleIndicatorEdgeAtOffset(kEdgeRgss7, fragPx, uOrigin, uScale, uSize, uCornerRadius, lightRimProfile, darkRimProfile);
+    supersampledEdge = resolveEdgeSupersample(edgeSampleSum);
+  }
+  float mask = supersampledEdge.x;
+  float continuousLightRimMask = supersampledEdge.y;
+  float lateralDarkRimMask = supersampledEdge.z;
+
   // ==========================================================================
   // BACKGROUND REFRACTION (THE MAIN EFFECT)
   // ==========================================================================
@@ -189,7 +279,7 @@ void main() {
   // All values are in LOGICAL pixels for consistency.
   
   vec2 posInBg = uBackgroundOrigin + localLogical;
-  vec2 uvBase = posInBg / uBackgroundSize;
+  vec2 physBgSize = max(uBackgroundSize * uDpr, vec2(1.0));
   
   // --------------------------------------------------------------------------
   // EDGE DISTORTION
@@ -198,6 +288,15 @@ void main() {
   // sampled background position inward along the surface normal.
   
   float distFromEdge = abs(dist);
+  float rimDistance = max(-dist, 0.0);
+
+  // 中文说明：双层边的真实覆盖面积已经由上方八点重建完成。中心距离只保留
+  // 给折射、Fresnel 与白色高光避让，避免改变用户已经确认的玻璃光学观感。
+  float innerHighlightGate = getInnerHighlightGate(
+    distFromEdge,
+    lightRimWidth,
+    uEdgeAbsorption
+  );
   
   // TWEAK: edgeZone - How far from the edge the distortion extends (logical px)
   //   Smaller = sharper transition, concentrated at very edge
@@ -222,19 +321,29 @@ void main() {
   //   0.35 means max offset is 35% of widget height
   //   Increase for more dramatic effect, decrease for subtler
   vec2 edgeOffsetLogical = surfaceNormal * edgeInfluence * bendStrength * uSize.y * 0.35;
-  vec2 edgeOffsetUV = edgeOffsetLogical / uBackgroundSize;
-  
-  // Apply refraction offset along the surface normal.
-  // On pre-3.46 OpenGL ES the background texture is stored with a bottom-left Y
-  // origin, so edgeOffsetLogical.y (computed in Flutter's Y-down space) must be
-  // negated to sample in the correct outward direction in the Y-up UV space.
-  // Flutter 3.46+ stores it top-down on every backend (see gles_compat.glsl),
-  // where negating would invert the refraction instead of correcting it.
+  // Standard 只使用 Dart 显式绑定的纹理；Premium 的实时采样与坐标变换由
+  // liquid_glass_final_render.frag 和官方 LiquidGlassLayer 统一负责。
   #ifdef LGR_GLES_FLIP_SAMPLE_Y
     vec2 localRefracted = posInBg + vec2(edgeOffsetLogical.x, -edgeOffsetLogical.y);
   #else
     vec2 localRefracted = posInBg - edgeOffsetLogical;
   #endif
+  vec2 refractedUv = localRefracted / uBackgroundSize;
+
+  // 中文说明：直接在解析式 SDF 上计算凹透镜 pinch，不再依赖几何 matte。
+  // L4 superellipse 让宽胶囊的上下边保持平直，mask 把偏移在 AA 边缘羽化为
+  // 零，避免玻璃内外背景坐标突然跳变。该公式与完整 Premium Shader 同源。
+  if (uPinchStrength > 0.001) {
+    vec2 geometryUv = localLogical / uSize;
+    vec2 centered = geometryUv - vec2(0.5);
+    vec2 absCentered = abs(centered) * 2.0;
+    float x2 = absCentered.x * absCentered.x;
+    float y2 = absCentered.y * absCentered.y;
+    float squircleDist = sqrt(sqrt(x2 * x2 + y2 * y2));
+    float pinchRamp = smoothstep(0.0, 1.0, squircleDist);
+    vec2 pinchShift = centered * pinchRamp * uPinchStrength * 0.025 * mask;
+    refractedUv += pinchShift;
+  }
   
   // --------------------------------------------------------------------------
   // CHROMATIC ABERRATION
@@ -248,19 +357,15 @@ void main() {
   
   vec3 bg;
   if (uHasBackground > 0.5) {
-    // Physical texture size (actual pixel dimensions after DPR capture).
-    // uBackgroundSize is in LOGICAL pixels; the texture has uDpr× more texels.
-    vec2 physBgSize = uBackgroundSize * uDpr;
-    vec2 invPhysBgSize = 1.0 / physBgSize;
-
     if (uChromaticAberration < 0.001) {
-      // No chromatic aberration — single bilinear fetch.
-      bg = textureBilinear(localRefracted / uBackgroundSize, physBgSize, invPhysBgSize).rgb;
+      // No chromatic aberration — one hardware-filtered texture fetch.
+      bg = sampleBackground(refractedUv, physBgSize).rgb;
     } else {
-      // Chromatic aberration: separate RGB channels with bilinear filtering.
-      vec3 colR = textureBilinear((localRefracted + chromaticShift) / uBackgroundSize, physBgSize, invPhysBgSize).rgb;
-      vec3 colG = textureBilinear(localRefracted / uBackgroundSize, physBgSize, invPhysBgSize).rgb;
-      vec3 colB = textureBilinear((localRefracted - chromaticShift) / uBackgroundSize, physBgSize, invPhysBgSize).rgb;
+      // Chromatic aberration: three hardware-filtered fetches, one per channel.
+      vec2 chromaticShiftUv = chromaticShift / uBackgroundSize;
+      vec3 colR = sampleBackground(refractedUv + chromaticShiftUv, physBgSize).rgb;
+      vec3 colG = sampleBackground(refractedUv, physBgSize).rgb;
+      vec3 colB = sampleBackground(refractedUv - chromaticShiftUv, physBgSize).rgb;
       bg = vec3(colR.r, colG.g, colB.b);
     }
   } else {
@@ -298,7 +403,7 @@ void main() {
   // Subtle glow at grazing angles (edges appear slightly brighter)
   
   // PP2: pow(radialDist, 2.0) → radialDist * radialDist (1 multiply, no transcendental).
-  float fresnel = (radialDist * radialDist) * 0.25;
+  float fresnel = (radialDist * radialDist) * 0.25 * innerHighlightGate;
   
   // ==========================================================================
   // HAIRLINE RIM
@@ -307,6 +412,10 @@ void main() {
   
   // Configurable hairline rim
   float borderMask = 1.0 - smoothstep(0.0, smoothing * uRimSmoothing, distFromEdge - uRimThickness);
+
+  // 中文说明：高光环只在暗色终止边内侧可见；关闭 edgeAbsorption 时共享
+  // gate 恒为 1，不改变第三方包原始的 hairline rim 行为。
+  borderMask *= innerHighlightGate;
 
   // --------------------------------------------------------------------------
   // SYNTHETIC BEVEL GRADIENT
@@ -406,6 +515,26 @@ void main() {
   float absorption = 1.0 - lensThickness * modulatedAbsorption;
   finalColor *= max(0.0, absorption);
 
+  // 中文说明：复用当前折射背景 bg，肩部按背景逐通道最多消耗剩余亮度空间的
+  // 35% / 20%；共享函数只在峰值核心把增益提升到 1.0，并用宽 smoothstep 保留
+  // 接近旧版 2dp 的可见范围。无纹理模式自然使用
+  // 既有底色，白底端点更白但不会让整段高光失去过渡。
+  finalColor = applyVerticalAreaHighlight(
+    finalColor,
+    bg,
+    verticalAreaHighlightExposureLift,
+    1.0
+  );
+
+  // 中文说明：最后先铺完整浅灰环，再叠加由 abs(surfaceNormal.x) 控制的
+  // 左右深边，防止 hairline 与 fresnel 再次点亮结构轮廓。
+  finalColor = applyDualLayerRim(
+    finalColor,
+    continuousLightRimMask,
+    lateralDarkRimMask,
+    uEdgeAbsorption
+  );
+
   // Clamp to prevent over-bright pixels
   finalColor = min(finalColor, vec3(1.2));
   
@@ -433,7 +562,7 @@ void main() {
 
 
   
-  float alpha = glassAlpha * mask;
+  float alpha = glassAlpha * mask * clamp(uVisibility, 0.0, 1.0);
   
   // Premultiplied alpha output
   fragColor = vec4(finalColor * alpha, alpha);

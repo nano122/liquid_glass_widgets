@@ -216,7 +216,13 @@ abstract class RenderLiquidGlassGeometry extends RenderProxyBox {
       return null;
     }
 
-    final snappedBounds = layerBounds.snapToPixels(devicePixelRatio);
+    // 中文说明：几何 Shader 现在会保留 SDF 外侧半个物理像素的覆盖率。
+    // 纹理边界如果仍紧贴形状包围盒，这半个像素会在栅格化前被裁掉，顶边或
+    // 底边便会再次随亚像素相位变淡。四周预留一个物理像素既完整容纳 AA，
+    // 也不会改变布局、命中区域或实际 Path；最终透明像素仍由 Shader 自遮罩。
+    final geometryAaPadding = 1.0 / devicePixelRatio;
+    final snappedBounds =
+        layerBounds.inflate(geometryAaPadding).snapToPixels(devicePixelRatio);
     final matteBounds = Rect.fromLTWH(
       snappedBounds.left * devicePixelRatio,
       snappedBounds.top * devicePixelRatio,

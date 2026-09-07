@@ -233,8 +233,9 @@ class GlassSearchBar extends StatefulWidget {
 
   /// Rendering quality for the glass effect.
   ///
-  /// Defaults to [GlassQuality.standard], which uses the lightweight fragment
-  /// shader. This works reliably in all contexts, including scrollable lists.
+  /// Defaults to [GlassQuality.standard], which uses the native full glass
+  /// layer on Impeller and the lightweight fragment shader on Skia/Web. This
+  /// works reliably in all contexts, including scrollable lists.
   ///
   /// Use [GlassQuality.premium] for full-pipeline shader with texture capture
   /// and chromatic aberration (Impeller only) in static layouts.

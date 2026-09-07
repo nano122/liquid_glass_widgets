@@ -210,9 +210,10 @@ class GlassContainer extends StatelessWidget {
   /// Rendering quality for the glass effect.
   ///
   /// If null, inherits from parent [InheritedLiquidGlass] or defaults to
-  /// [GlassQuality.standard], which uses the lightweight fragment shader.
-  /// This is 5-10x faster than BackdropFilter and works reliably in all
-  /// contexts, including scrollable lists.
+  /// [GlassQuality.standard], which uses the native full glass layer on
+  /// Impeller and the lightweight fragment shader on Skia/Web. The fallback is
+  /// 5-10x faster than BackdropFilter and works reliably in all contexts,
+  /// including scrollable lists.
   ///
   /// Use [GlassQuality.premium] for full-pipeline shader with texture capture
   /// and chromatic aberration (Impeller only) in static layouts.
@@ -280,9 +281,9 @@ class GlassContainer extends StatelessWidget {
       );
     }
 
-    // 4. Apply glass effect with adaptive fallback
-    // Premium quality uses Impeller on iOS/macOS, falls back to lightweight shader on web
-    // Standard quality always uses lightweight shader
+    // 4. Apply glass effect with adaptive fallback.
+    // Impeller uses the native full glass layer for both Standard and Premium;
+    // Skia/Web keeps the calibrated lightweight shader fallback.
 
     // Debug-only: warn when per-widget settings differ from the parent layer's
     // settings in grouped mode. This catches the common mistake of passing

@@ -1,6 +1,7 @@
 import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
+
 import '../../src/renderer/liquid_glass_renderer.dart';
 
 import '../../theme/glass_theme.dart';
@@ -15,12 +16,13 @@ import 'inherited_liquid_glass.dart';
 ///
 /// This is a custom replacement for `LiquidGlassLayer` that uses `AdaptiveGlass`
 /// for rendering, ensuring the background uses the lightweight shader on web/Skia
-/// instead of falling back to FakeGlass.
+/// instead of falling back to FakeGlass. On Impeller, Standard and Premium share
+/// one native root layer so their descendants sample the same compositor backdrop.
 ///
 /// **Fallback chain for background:**
-/// - Premium + Impeller → Full shader (best quality) + blending support
+/// - Standard/Premium + Impeller → Full shader + blending support
 /// - Premium + Skia/web → Lightweight shader (not FakeGlass!)
-/// - Standard → Lightweight shader
+/// - Standard + Skia/web → Lightweight shader
 ///
 /// **Blending:**
 /// - `blendAmount` parameter only works on Impeller (requires full renderer)
@@ -94,6 +96,25 @@ class AdaptiveLiquidGlassLayer extends StatefulWidget {
   /// Detects if Impeller rendering engine is active.
   static bool get _canUseImpeller => ui.ImageFilter.isShaderFilterSupported;
 
+  /// Whether the adaptive root should create the native full renderer.
+  ///
+  /// Standard and Premium intentionally share this decision on Impeller. The
+  /// distinction between the two qualities is kept in their settings and in
+  /// the adaptive policy, while the root layer must remain shared so child
+  /// glass surfaces sample one consistent compositor backdrop. Skia/Web,
+  /// minimal quality, and PlatformView backdrops keep the lightweight or
+  /// BackdropFilter fallback path.
+  @visibleForTesting
+  static bool shouldUseNativeRenderer({
+    required bool isImpeller,
+    required bool platformViewBackdrop,
+    required GlassQuality quality,
+  }) {
+    return isImpeller &&
+        !platformViewBackdrop &&
+        quality != GlassQuality.minimal;
+  }
+
   @override
   State<AdaptiveLiquidGlassLayer> createState() =>
       _AdaptiveLiquidGlassLayerState();
@@ -120,14 +141,15 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
     final themeOverride = themeData.settingsFor(context);
     final withTheme = themeOverride?.applyTo(baseSettings) ?? baseSettings;
     final effectiveSettings = widget.settings ?? withTheme;
-    final effectiveQuality = widget.quality ??
+    final effectiveQuality =
+        widget.quality ??
         themeData.qualityFor(context) ??
         GlassQuality.standard;
 
     // ---- TRANSPARENT PASS-THROUGH FAST-PATHS --------------------------------
-    // Two cases share the same pass-through structure (no LiquidGlassLayer
-    // wrapper, no blend group — just InheritedLiquidGlass so descendants can
-    // read settings and quality):
+    // The fallback cases share the same pass-through structure (no
+    // LiquidGlassLayer wrapper, no blend group — just InheritedLiquidGlass so
+    // descendants can read settings and quality):
     //
     // 1. GlassQuality.standard / minimal:
     //    Standard 与 Minimal 的效果都由子级自己绘制，不会向 Premium
@@ -144,15 +166,32 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
     //    child AdaptiveGlass widgets, each rendered as _FrostedFallback with
     //    correct shape-aware clipping.
     //
-    // 2. platformViewBackdrop == true (e.g. glass over an iOS map/video):
+    // 2. Standard on Skia/Web:
+    //    Standard descendants render through LightweightLiquidGlass because
+    //    ShaderFilter is unavailable. 中文说明：此处仍保持根层透传，避免在
+    //    不支持原生 Shader 的渲染器上创建无效的原生合成层。
+    //
+    //    Standard on Impeller deliberately does not take this branch. It gets
+    //    the same shared native root as Premium, otherwise each child would
+    //    sample a different backdrop and the surface could become matte.
+    //
+    // 3. platformViewBackdrop == true (e.g. glass over an iOS map/video):
     //    LiquidGlassLayer pushes an Impeller fragment-shader ImageFilter layer.
     //    Attempting to run a shader filter over a UIKitView crashes on iOS.
     //    We bypass it entirely; child AdaptiveGlass widgets already route to
     //    _FrostedFallback (live BackdropFilter) when platformViewBackdrop is
     //    set, which correctly samples through the PlatformView compositor.
     // -------------------------------------------------------------------------
-    if (effectiveQuality != GlassQuality.premium ||
-        widget.platformViewBackdrop) {
+    // 中文说明：Poiesis 的 Standard 与 Premium 在 Impeller 上共用完整原生
+    // 根层；质量差异留在 settings 内，避免 Standard 子玻璃各自采样不同背景。
+    final bool useFullRenderer =
+        AdaptiveLiquidGlassLayer.shouldUseNativeRenderer(
+          isImpeller: AdaptiveLiquidGlassLayer._canUseImpeller,
+          platformViewBackdrop: widget.platformViewBackdrop,
+          quality: effectiveQuality,
+        );
+
+    if (!useFullRenderer) {
       return GlassIsolationScope(
         isolated: false,
         child: InheritedLiquidGlass(
@@ -164,20 +203,18 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
       );
     }
 
-    // Detect if we should use the full Impeller-native rendering pipeline.
-    // platformViewBackdrop is never true here — that case returned above.
-    final bool useFullRenderer = AdaptiveLiquidGlassLayer._canUseImpeller &&
-        effectiveQuality == GlassQuality.premium;
-
     // Resolve shadow for SDF rendering. Shadows only apply in light mode.
     final bool isDark = GlassTheme.brightnessOf(context) == Brightness.dark;
-    final List<BoxShadow> resolvedShadows =
-        isDark ? const <BoxShadow>[] : effectiveSettings.effectiveShadow;
+    final List<BoxShadow> resolvedShadows = isDark
+        ? const <BoxShadow>[]
+        : effectiveSettings.effectiveShadow;
 
     // Keep the child subtree's element identity stable across the wrapper toggle
     // below (see [_contentKey]) so its animation controllers survive.
-    final Widget keyedContent =
-        KeyedSubtree(key: _contentKey, child: widget.child);
+    final Widget keyedContent = KeyedSubtree(
+      key: _contentKey,
+      child: widget.child,
+    );
 
     return PremiumGlassTracker(
       child: LiquidGlassLayer(
@@ -191,12 +228,13 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
             quality: effectiveQuality,
             isBlurProvidedByAncestor:
                 false, // Root never provides the blur; containers do.
-            child: useFullRenderer
-                ? LiquidGlassBlendGroup(
-                    blend: widget.blendAmount,
-                    child: keyedContent,
-                  )
-                : keyedContent,
+            // Standard 与 Premium 在 Impeller 下共用同一个 blend group，保证
+            // 子玻璃从同一原生 backdrop 采样；Skia/Web 已在上面的回退分支
+            // 中直接使用 LightweightLiquidGlass。
+            child: LiquidGlassBlendGroup(
+              blend: widget.blendAmount,
+              child: keyedContent,
+            ),
           ),
         ),
       ),

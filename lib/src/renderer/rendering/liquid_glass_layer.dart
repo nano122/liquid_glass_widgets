@@ -1,10 +1,12 @@
 // ignore_for_file: avoid_setters_without_getters, public_member_api_docs
 
+import 'dart:math' as math;
 import 'dart:ui';
 import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter/rendering.dart';
+
 import '../internal/glass_materialize_scope.dart';
 import '../internal/multi_shader_builder.dart';
 import '../liquid_glass_renderer.dart';
@@ -60,7 +62,7 @@ class _ScaleSafeRepaintBoundary extends SingleChildRenderObjectWidget {
 
 class _RenderScaleSafeRepaintBoundary extends RenderProxyBox {
   _RenderScaleSafeRepaintBoundary({required EdgeInsets expansion})
-      : _expansion = expansion;
+    : _expansion = expansion;
 
   EdgeInsets _expansion;
   set expansion(EdgeInsets value) {
@@ -80,11 +82,11 @@ class _RenderScaleSafeRepaintBoundary extends RenderProxyBox {
   /// triggering a hard clip at the original layout boundary.
   @override
   Rect get paintBounds => Rect.fromLTRB(
-        -_expansion.left,
-        -_expansion.top,
-        size.width + _expansion.right,
-        size.height + _expansion.bottom,
-      );
+    -_expansion.left,
+    -_expansion.top,
+    size.width + _expansion.right,
+    size.height + _expansion.bottom,
+  );
 }
 
 /// Represents a layer of multiple [LiquidGlass] shapes or
@@ -147,6 +149,7 @@ class LiquidGlassLayer extends StatefulWidget {
     this.settings = const LiquidGlassSettings(),
     this.shadows = const <BoxShadow>[],
     this.clipExpansion = EdgeInsets.zero,
+    this.preferAnalyticRoundedRectangle = false,
     this.captureImage,
     this.captureOriginInScreenSpace = Offset.zero,
     super.key,
@@ -175,6 +178,13 @@ class LiquidGlassLayer extends StatefulWidget {
   ///
   /// Defaults to [EdgeInsets.zero] — zero extra GPU cost for static glass.
   final EdgeInsets clipExpansion;
+
+  /// 是否优先为单个圆角矩形启用最终渲染 Shader 内的解析式 SDF。
+  ///
+  /// 中文说明：这个开关不创建新的合成层；它只允许 [RenderLiquidGlassLayer]
+  /// 在确认当前层恰好包含一个 [LiquidRoundedRectangle] 时跳过 geometry texture。
+  /// 不满足条件时无条件回退官方纹理几何路径。
+  final bool preferAnalyticRoundedRectangle;
 
   /// Pre-captured background image to use instead of a live [BackdropFilterLayer].
   ///
@@ -215,16 +225,15 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
     // [LOCAL PATCH]: a running materialize transition above this layer
     // dissolves its glass through the settings' visibility channel — the one
     // fade the backdrop pass honours. Identity (the same instance) at rest.
-    final settings =
-        GlassMaterializeScope.resolveSettings(context, widget.settings);
+    final settings = GlassMaterializeScope.resolveSettings(
+      context,
+      widget.settings,
+    );
 
     if (!ImageFilter.isShaderFilterSupported) {
       return LiquidGlassRenderScope(
         settings: settings,
-        child: InheritedGeometryRenderLink(
-          link: _link,
-          child: widget.child,
-        ),
+        child: InheritedGeometryRenderLink(link: _link, child: widget.child),
       );
     }
 
@@ -247,6 +256,8 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
                 shadows: widget.shadows,
                 link: _link,
                 clipExpansion: widget.clipExpansion,
+                preferAnalyticRoundedRectangle:
+                    widget.preferAnalyticRoundedRectangle,
                 captureImage: widget.captureImage,
                 captureOriginInScreenSpace: widget.captureOriginInScreenSpace,
                 selfScaled: LiquidGlassSelfScaleScope.of(context),
@@ -270,6 +281,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
     required Widget super.child,
     required this.link,
     this.clipExpansion = EdgeInsets.zero,
+    this.preferAnalyticRoundedRectangle = false,
     this.captureImage,
     this.captureOriginInScreenSpace = Offset.zero,
     this.selfScaled = false,
@@ -281,6 +293,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
   final List<BoxShadow> shadows;
   final GeometryRenderLink link;
   final EdgeInsets clipExpansion;
+  final bool preferAnalyticRoundedRectangle;
   final ui.Image? captureImage;
   final Offset captureOriginInScreenSpace;
 
@@ -297,6 +310,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       shadows: shadows,
       link: link,
       clipExpansion: clipExpansion,
+      preferAnalyticRoundedRectangle: preferAnalyticRoundedRectangle,
       captureImage: captureImage,
       captureOriginInScreenSpace: captureOriginInScreenSpace,
       selfScaled: selfScaled,
@@ -315,6 +329,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       ..shadows = shadows
       ..backdropKey = backdropKey
       ..clipExpansion = clipExpansion
+      ..preferAnalyticRoundedRectangle = preferAnalyticRoundedRectangle
       ..captureImage = captureImage
       ..captureOriginInScreenSpace = captureOriginInScreenSpace
       ..selfScaled = selfScaled;
@@ -333,9 +348,10 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     super.captureImage,
     super.captureOriginInScreenSpace,
     EdgeInsets clipExpansion = EdgeInsets.zero,
+    super.preferAnalyticRoundedRectangle,
     bool selfScaled = false,
-  })  : _clipExpansion = clipExpansion,
-        _selfScaled = selfScaled;
+  }) : _clipExpansion = clipExpansion,
+       _selfScaled = selfScaled;
 
   // ── Cached blur filter ──────────────────────────────────────────────────
   // The BackdropFilterLayer's blur filter is rebuilt only when blurSigma
@@ -368,10 +384,10 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
 
   @override
   Size get desiredMatteSize => switch (owner?.rootNode) {
-        final RenderView rv => rv.size,
-        final RenderBox rb => rb.size,
-        _ => Size.zero,
-      };
+    final RenderView rv => rv.size,
+    final RenderBox rb => rb.size,
+    _ => Size.zero,
+  };
 
   Matrix4? _unscaledTransform;
   Offset? _unscaledCaptureOrigin;
@@ -387,8 +403,11 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     //   - 1D jelly physics (one axis squashes, the other stretches; always one >= 1.0)
     //   - Pure translations (both axes remain 1.0)
     //   - Z-axis perspective flattening (m[10] == 0 but m[0] == m[5] == 1)
-    final scaleX = m[0].abs();
-    final scaleY = m[5].abs();
+    // 中文说明：二维仿射矩阵的 X/Y 基向量分别是 (m0,m1) 与 (m4,m5)。
+    // 只读对角线会把纯旋转的 cos(theta) < 1 误判成均匀缩放，继而冻结
+    // matteTransform；必须用完整基向量长度提取真实缩放量。
+    final scaleX = math.sqrt(m[0] * m[0] + m[1] * m[1]);
+    final scaleY = math.sqrt(m[4] * m[4] + m[5] * m[5]);
     // Use a very tight tolerance (0.9999) to catch the very first frame of the CupertinoSheet
     // scale animation. A looser tolerance (0.99) allowed early frames of the animation
     // (e.g., 0.995) to overwrite the snapshot before freezing, causing a slight jump.
@@ -415,7 +434,9 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
   /// [markNeedsPaint], no [setState], and no layout-invalidation, so it does
   /// not violate Flutter's read-only paint contract.
   void _updateScaleState(
-      Matrix4 currentTransform, Offset currentCaptureOrigin) {
+    Matrix4 currentTransform,
+    Offset currentCaptureOrigin,
+  ) {
     if (!_hasScale(currentTransform)) {
       _unscaledTransform = currentTransform;
       _unscaledCaptureOrigin = currentCaptureOrigin;
@@ -442,8 +463,17 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
 
   @override
   void onTransformChanged() {
-    // Geometry is in LOCAL space; matteTransform is applied at paint time,
-    // so only a repaint — not a layout/geometry rebuild — is required here.
+    // 中文说明：祖先 Transform 更新可能只触发图层重组，本 repaint boundary
+    // 不一定在当前帧重新 paint。变换追踪层先于 Shader 图层加入 scene，因此
+    // 可以在这里同步逆仿射并重建 ImageFilter 对 Shader uniform 的快照，让
+    // 几何纹理及其最外深色细边在同一帧跟上陀螺仪旋转。
+    final shaderLayer = _shaderHandle.layer;
+    if (shaderLayer != null && synchronizeGeometryTransformUniformsForScene()) {
+      shaderLayer.filter = ImageFilter.shader(renderShader);
+    }
+
+    // 仍请求一次常规重绘：若本帧遇到透视/退化矩阵而无法同步，下一帧会走
+    // 完整兼容路径；局部 shape 自身变化也继续由原 paint 流程负责。
     markNeedsPaint();
   }
 
@@ -464,9 +494,9 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
         if (shadow.color.a == 0) continue;
 
         // Inflate clip rect to ensure large blurs aren't cut off
-        final shadowClip = localBounds.shift(shadow.offset).inflate(
-              shadow.spreadRadius + shadow.blurRadius * 3,
-            );
+        final shadowClip = localBounds
+            .shift(shadow.offset)
+            .inflate(shadow.spreadRadius + shadow.blurRadius * 3);
 
         context.canvas.saveLayer(shadowClip, Paint());
 
@@ -545,13 +575,9 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
         boundingBox,
         clipPath,
         (context, offset) {
-          context.pushLayer(
-            blurLayer,
-            (context, offset) {
-              paintShapeContents(context, offset, shapes, insideGlass: true);
-            },
-            offset,
-          );
+          context.pushLayer(blurLayer, (context, offset) {
+            paintShapeContents(context, offset, shapes, insideGlass: true);
+          }, offset);
         },
         oldLayer: _clipPathLayerHandle.layer,
       );
@@ -599,13 +625,7 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     _updateScaleState(getTransformTo(null), super.captureOriginInScreenSpace);
 
     if (captureImage case final capture?) {
-      paintLiquidGlassWithCapture(
-        context,
-        offset,
-        shapes,
-        clipRect,
-        capture,
-      );
+      paintLiquidGlassWithCapture(context, offset, shapes, clipRect, capture);
       // paintLiquidGlassWithCapture handles all three passes (blur, shader, contents).
       // Release the stale BackdropFilter layer handles so the engine can collect
       // the offscreen surface when we're no longer using the backdrop path.
@@ -622,13 +642,9 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
       offset,
       clipRect,
       (context, offset) {
-        context.pushLayer(
-          shaderLayer,
-          (context, offset) {
-            paintShapeContents(context, offset, shapes, insideGlass: false);
-          },
-          offset,
-        );
+        context.pushLayer(shaderLayer, (context, offset) {
+          paintShapeContents(context, offset, shapes, insideGlass: false);
+        }, offset);
       },
       oldLayer: _clipRectLayerHandle.layer,
     );

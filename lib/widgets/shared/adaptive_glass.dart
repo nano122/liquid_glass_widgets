@@ -4,9 +4,10 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 import '../../src/renderer/internal/glass_materialize_scope.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/liquid_glass_render_scope.dart';
 import '../../theme/glass_theme.dart';
 import 'package:flutter/foundation.dart'
-    show kIsWeb, defaultTargetPlatform, TargetPlatform;
+    show kIsWeb, defaultTargetPlatform, TargetPlatform, visibleForTesting;
 
 import '../../types/glass_quality.dart';
 import '../../src/renderer/glass_backdrop_kernel.dart';
@@ -20,9 +21,9 @@ import 'inherited_liquid_glass.dart';
 /// rendering path based on [GlassQuality] and the active Flutter renderer.
 ///
 /// **Fallback chain:**
-/// 1. Premium quality + Impeller available → Full shader (best quality)
-/// 2. Premium quality + Skia/web → Lightweight shader (our calibrated shader)
-/// 3. Standard quality → Always lightweight shader
+/// 1. Standard/Premium quality + Impeller available → Full shader
+/// 2. Standard/Premium quality + Skia/web → Lightweight shader
+/// 3. Minimal quality → Shader-free frosted fallback
 /// 4. If lightweight shader fails → FakeGlass (final fallback)
 ///
 /// Prefer this over [LiquidGlass] directly: [LiquidGlass] is Impeller-only
@@ -64,8 +65,9 @@ class AdaptiveGlass extends StatelessWidget {
 
   /// Controls render fidelity. Defaults to [GlassQuality.standard].
   ///
-  /// [GlassQuality.premium] enables the full shader pipeline with specular
-  /// reflections and dynamic refraction.
+  /// On Impeller, [GlassQuality.standard] and [GlassQuality.premium] use the
+  /// same full shader pipeline with specular reflections and dynamic
+  /// refraction. On Skia/Web, both qualities use the lightweight fallback.
   /// [GlassQuality.minimal] always renders the frosted fallback, avoiding the
   /// shader entirely (useful during animations or on low-end devices).
   final GlassQuality quality;
@@ -73,7 +75,9 @@ class AdaptiveGlass extends StatelessWidget {
   /// If `true`, wraps the glass layer in a [RepaintBoundary] (own compositing
   /// layer). This can improve performance when the glass surface moves
   /// independently of the rest of the widget tree, at the cost of extra GPU
-  /// memory. Defaults to `true`.
+  /// memory. Defaults to `true`. When `false`, the widget joins an existing
+  /// native [LiquidGlassLayer]; if no such ancestor exists on Impeller, the
+  /// full native path promotes itself to an own layer automatically.
   final bool useOwnLayer;
 
   /// Extra space (logical pixels) to inflate the [RepaintBoundary] paint bounds
@@ -125,6 +129,37 @@ class AdaptiveGlass extends StatelessWidget {
   ///
   /// This is the same check used internally by liquid_glass_renderer.
   static bool get _canUseImpeller => ui.ImageFilter.isShaderFilterSupported;
+
+  /// 中文说明：Standard 在 Impeller 上也复用 Premium 的官方合成层，
+  /// 这样两档质量使用同一套几何边缘、黑色终止边和实时 backdrop Shader；
+  /// Skia/Web 仍走 LightweightLiquidGlass，minimal 与 PlatformView 继续走
+  /// 无自定义 Shader 的安全回退路径。
+  @visibleForTesting
+  static bool shouldUsePremiumShader({
+    required bool isImpeller,
+    required bool isWeb,
+    required bool platformViewBackdrop,
+    required GlassQuality quality,
+  }) =>
+      isImpeller &&
+      !isWeb &&
+      !platformViewBackdrop &&
+      quality != GlassQuality.minimal;
+
+  /// Decides whether the native path must provision an independent layer.
+  ///
+  /// 中文说明：Premium 原本要求调用方显式提供 LiquidGlassLayer；Standard
+  /// 改为复用 Premium Shader 后，独立的 Standard 按钮也会获得同样的前置
+  /// 条件。为了兼容既有 `useOwnLayer: false` 调用点，这里只在没有父层时
+  /// 自动升级为 own layer；已有共享层时仍保持 grouped 渲染，避免破坏
+  /// 底部栏等组件的融合和额外 GPU 内存开销。
+  @visibleForTesting
+  static bool shouldUseOwnLayerForNativePath({
+    required bool requestedOwnLayer,
+    required bool hasNativeLayer,
+    required bool isIsolated,
+  }) =>
+      requestedOwnLayer || isIsolated || !hasNativeLayer;
 
   /// Static helper to render glass in a grouped context without creating a new layer.
   /// This is the adaptive replacement for [LiquidGlass.withOwnLayer].
@@ -188,7 +223,7 @@ class AdaptiveGlass extends StatelessWidget {
       return Opacity(opacity: 0.0, child: content);
     }
 
-    // ---- MINIMAL FAST-PATH ---------------------------------------------------
+    // ---- SHADER-FREE FAST-PATH ----------------------------------------------
     // GlassQuality.minimal bypasses all custom shaders. Renders via
     // _FrostedFallback: ClipPath(ShapeBorderClipper) + BackdropFilter + tint.
     // ClipPath correctly clips ALL shape types (oval, superellipse, rect).
@@ -200,6 +235,12 @@ class AdaptiveGlass extends StatelessWidget {
     // canUsePremiumShader below), so they render inert there — the frost is the
     // one tier that actually blurs over a PlatformView. This finally delivers
     // the "live BackdropFilter path" the canUsePremiumShader comment promises.
+    //
+    // 中文说明：blur == 0 不能作为 shader-free 条件。blur 只控制 Gaussian
+    // background blur Pass；折射、边缘形变、色散和高光由后续玻璃 shader 独立
+    // 负责。若在这里按零值提前回退，Premium 会连同用户需要的边缘形变一起消失。
+    // 后续 renderer 已分别用 `effectiveBlur > 0` 判断是否创建模糊层，因此让零值
+    // 继续进入 shader 路径不会重新引入 Gaussian blur layer。
     // --------------------------------------------------------------------------
     if (quality == GlassQuality.minimal || platformViewBackdrop) {
       return _wrapWithDecorations(
@@ -252,14 +293,15 @@ class AdaptiveGlass extends StatelessWidget {
     // because those will fall back to FakeGlass (solid color) inside the renderer.
     // We MUST use our LightweightLiquidGlass to get actual glass effects.
 
-    // platformViewBackdrop forces the live BackdropFilter path even at premium:
-    // the premium shader's toImageSync backdrop can't capture a PlatformView, so
-    // over one it must use BackdropFilter (live) instead. The local/cheap checks
-    // are evaluated before the platform shader-support query (_canUseImpeller).
-    final bool canUsePremiumShader = !kIsWeb &&
-        !platformViewBackdrop &&
-        quality == GlassQuality.premium &&
-        _canUseImpeller;
+    // platformViewBackdrop forces the live BackdropFilter path at both standard
+    // and premium quality: the native shader's captured backdrop cannot include
+    // a PlatformView, so over one it must use the live fallback instead.
+    final bool canUsePremiumShader = shouldUsePremiumShader(
+      isImpeller: _canUseImpeller,
+      isWeb: kIsWeb,
+      platformViewBackdrop: platformViewBackdrop,
+      quality: quality,
+    );
 
     if (!canUsePremiumShader) {
       // 1. Detect Grouped Elevation
@@ -376,9 +418,9 @@ class AdaptiveGlass extends StatelessWidget {
       );
     }
 
-    // Impeller + Premium Path: Use the renderer's native path.
-    // Wrap in PremiumGlassTracker so GlassPerformanceMonitor can correlate
-    // slow raster frames with active premium surfaces.
+    // Impeller + Standard/Premium Path: Use the renderer's native path.
+    // Wrap in PremiumGlassTracker because both quality levels now share the
+    // same native compositor and need the same raster performance accounting.
     //
     // Force useOwnLayer when inside a GlassIsolationScope (e.g. GlassScaffold
     // bottom bar). This gives bars their own compositing layer so body glass
@@ -394,8 +436,13 @@ class AdaptiveGlass extends StatelessWidget {
     // De-isolate children of the own-layer so nested glass (e.g. tab
     // items inside a bottom bar) groups with this layer rather than
     // creating additional own-layers (which would cause double-glass).
-    final effectiveUseOwnLayer =
-        useOwnLayer || GlassIsolationScope.isIsolated(context);
+    final bool hasNativeLayer = LiquidGlassRenderScope.maybeOf(context) != null;
+    final bool isIsolated = GlassIsolationScope.isIsolated(context);
+    final effectiveUseOwnLayer = shouldUseOwnLayerForNativePath(
+      requestedOwnLayer: useOwnLayer,
+      hasNativeLayer: hasNativeLayer,
+      isIsolated: isIsolated,
+    );
 
     if (effectiveUseOwnLayer) {
       // Resolve shadows for the GPU cutout method
