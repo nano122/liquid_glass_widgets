@@ -277,6 +277,7 @@ const float kBottomAreaHighlightMaxLogicalHeight = 20.0;
 const float kTopAreaHighlightPlateauMaxLogicalHeight = 2.0;
 const float kBottomAreaHighlightPlateauMaxLogicalHeight = 3.0;
 const float kAreaHighlightMiddleBackdropGate = 0.25;
+const float kAreaHighlightDarkPeakGate = 0.50;
 const float kAreaHighlightDarkFullLuma = 0.30;
 const float kAreaHighlightDarkFadeEndLuma = 0.50;
 const float kAreaHighlightLightRiseStartLuma = 0.90;
@@ -334,10 +335,10 @@ float getVerticalAreaHighlightExposureLift(
 
 float getVerticalAreaHighlightBackdropGate(vec3 safeBackdropColor) {
     // 中文说明：逐通道背景权重能保留色相，再以 Rec.709 亮度生成三通道共用
-    // 的 U 型标量门控。亮度不超过 0.30 时恢复旧版完整高光；0.30~0.50 平滑
-    // 降到 25%，并在 0.50~0.90 保持低谷，避免中间背景持续被抬亮；超过 0.90
-    // 后快速平滑恢复，纯白背景完整放行。两个 smoothstep 在各自端点导数为零，
-    // 使用 max 合并后仍连续，不会在背景纹理跨越阈值时出现亮度断层。
+    // 的 U 型标量门控。亮度不超过 0.30 时的暗端上限独立解耦为 0.50，降低深暗背景
+    // 下的高光反射刺眼感并保留微通透质感；0.30~0.50 平滑降到 25%，并在 0.50~0.90
+    // 保持低谷，避免中间背景持续被抬亮；超过 0.90 后快速平滑恢复，纯白背景完整放行
+    // 到 1.0。暗端与亮端分别计算独立门控后再取最大值，端点导数为零且连续。
     float backdropLuma = dot(safeBackdropColor, kAreaHighlightLumaWeights);
     float darkEndpointWeight = 1.0 - smoothstep(
         kAreaHighlightDarkFullLuma,
@@ -349,8 +350,17 @@ float getVerticalAreaHighlightBackdropGate(vec3 safeBackdropColor) {
         kAreaHighlightLightFullLuma,
         backdropLuma
     );
-    float endpointWeight = max(darkEndpointWeight, lightEndpointWeight);
-    return mix(kAreaHighlightMiddleBackdropGate, 1.0, endpointWeight);
+    float darkGate = mix(
+        kAreaHighlightMiddleBackdropGate,
+        kAreaHighlightDarkPeakGate,
+        darkEndpointWeight
+    );
+    float lightGate = mix(
+        kAreaHighlightMiddleBackdropGate,
+        1.0,
+        lightEndpointWeight
+    );
+    return max(darkGate, lightGate);
 }
 
 vec3 applyVerticalAreaHighlight(
@@ -360,7 +370,7 @@ vec3 applyVerticalAreaHighlight(
     float colorAlpha
 ) {
     // 中文说明：背景色不再作为固定加法，而是作为剩余亮度空间的逐通道权重。
-    // 峰值平台可把几何曝光提高到 1.0；U 型亮度门控让暗背景保留旧版反射，
+    // 峰值平台可把几何曝光提高到 1.0；U 型亮度门控让暗背景高光降至 0.50 峰值以消除过亮，
     // 中间背景压低到 25%，接近白色时再恢复可见高光。纯黑背景仍因逐通道权重
     // 为零而不会凭空生白，彩色背景也会保留自身色相与纹理。headroom 已位于
     // 当前 alpha 的合法范围，因此预乘分支无需再次乘 alpha，也不会在透明边缘漏色。
