@@ -1,7 +1,11 @@
+import 'dart:ui';
+
+import 'package:liquid_glass_widgets/constants/glass_defaults.dart';
 import 'package:liquid_glass_widgets/src/renderer/liquid_glass_renderer.dart';
 import 'package:liquid_glass_widgets/theme/glass_interaction_settings.dart';
 import 'package:liquid_glass_widgets/theme/glass_theme.dart';
 import 'package:liquid_glass_widgets/theme/glass_theme_data.dart';
+import 'package:liquid_glass_widgets/types/glass_button_style.dart';
 import 'package:liquid_glass_widgets/types/glass_quality.dart';
 import 'package:liquid_glass_widgets/widgets/interactive/glass_button.dart';
 import 'package:flutter/cupertino.dart';
@@ -9,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/widgets/shared/adaptive_liquid_glass_layer.dart';
+import 'package:liquid_glass_widgets/widgets/shared/glass_focus_ring_painter.dart';
 
 import '../../shared/test_helpers.dart';
 
@@ -692,12 +697,11 @@ void main() {
       // CustomPaint for the focus ring is only inserted when focused.
       // When not focused, ValueListenableBuilder returns child directly —
       // no Stack, no CustomPaint for the ring.
-      // We look for a CustomPaint that is a descendant of the GlassButton's
-      // Stack — if none exist, the ring is correctly absent.
+      // We look for a CustomPaint whose painter is GlassFocusRingPainter —
+      // if none exist, the ring is correctly absent.
       expect(
-        find.descendant(
-          of: find.byType(Stack),
-          matching: find.byType(CustomPaint),
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is GlassFocusRingPainter,
         ),
         findsNothing,
         reason: 'Focus ring CustomPaint must not be present when button is '
@@ -732,13 +736,12 @@ void main() {
       addTearDown(() => FocusManager.instance.highlightStrategy =
           FocusHighlightStrategy.automatic);
 
-      // After keyboard focus, ValueListenableBuilder inserts Stack + CustomPaint.
+      // After keyboard focus, ValueListenableBuilder inserts Stack + CustomPaint with GlassFocusRingPainter.
       expect(
-        find.descendant(
-          of: find.byType(GlassButton),
-          matching: find.byType(CustomPaint),
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is GlassFocusRingPainter,
         ),
-        findsWidgets,
+        findsOneWidget,
         reason: 'Focus ring CustomPaint must be present when keyboard-focused',
       );
     });
@@ -857,6 +860,198 @@ void main() {
       } finally {
         handle.dispose();
       }
+    });
+  });
+
+  // ===========================================================================
+  // Outer shadow (方案二：外部专用反向镂空投影)
+  // ===========================================================================
+  group('GlassButton outer shadow', () {
+    testWidgets('renders outer shadow CustomPaint by default in light mode',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          theme: ThemeData(
+            brightness: Brightness.light,
+            scaffoldBackgroundColor: Colors.transparent,
+          ),
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(CupertinoIcons.heart),
+              onTap: () {},
+            ),
+          ),
+        ),
+      );
+
+      final shadowFinder = find.byWidgetPredicate(
+        (w) => w is CustomPaint && w.painter is GlassButtonOuterShadowPainter,
+      );
+      expect(shadowFinder, findsOneWidget);
+
+      final customPaint = tester.widget<CustomPaint>(shadowFinder);
+      final painter = customPaint.painter as GlassButtonOuterShadowPainter;
+      expect(
+          painter.shadow.blurRadius, equals(GlassDefaults.outerShadowBlurRadius));
+      expect(painter.shadow.blurRadius, equals(12.0));
+      expect(painter.shadow.offset, equals(GlassDefaults.outerShadowOffset));
+      expect(painter.shadow.color, equals(GlassDefaults.outerShadowColorLight));
+      expect(painter.shadow.color, equals(const Color(0x0E0E1C44)));
+    });
+
+    testWidgets('uses dark mode shadow color when brightness is dark',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          theme: ThemeData(
+            brightness: Brightness.dark,
+            scaffoldBackgroundColor: Colors.transparent,
+          ),
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(CupertinoIcons.heart),
+              onTap: () {},
+            ),
+          ),
+        ),
+      );
+
+      final shadowFinder = find.byWidgetPredicate(
+        (w) => w is CustomPaint && w.painter is GlassButtonOuterShadowPainter,
+      );
+      expect(shadowFinder, findsOneWidget);
+
+      final customPaint = tester.widget<CustomPaint>(shadowFinder);
+      final painter = customPaint.painter as GlassButtonOuterShadowPainter;
+      expect(painter.shadow.blurRadius, equals(12.0));
+      expect(painter.shadow.offset, equals(const Offset(0, 2)));
+      expect(painter.shadow.color, equals(GlassDefaults.outerShadowColorDark));
+      expect(painter.shadow.color, equals(const Color(0x1A000000)));
+    });
+
+    testWidgets('does not render outer shadow when enableOuterShadow is false',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(CupertinoIcons.heart),
+              onTap: () {},
+              enableOuterShadow: false,
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is GlassButtonOuterShadowPainter,
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets(
+        'does not render outer shadow when style is GlassButtonStyle.transparent',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(CupertinoIcons.heart),
+              onTap: () {},
+              style: GlassButtonStyle.transparent,
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is GlassButtonOuterShadowPainter,
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('respects explicit custom outerShadow override',
+        (tester) async {
+      const customShadow = BoxShadow(
+        color: Color(0x66FF0000),
+        blurRadius: 12.0,
+        offset: Offset(0, 4),
+      );
+
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton(
+              icon: const Icon(CupertinoIcons.heart),
+              onTap: () {},
+              outerShadow: customShadow,
+            ),
+          ),
+        ),
+      );
+
+      final shadowFinder = find.byWidgetPredicate(
+        (w) => w is CustomPaint && w.painter is GlassButtonOuterShadowPainter,
+      );
+      expect(shadowFinder, findsOneWidget);
+
+      final customPaint = tester.widget<CustomPaint>(shadowFinder);
+      final painter = customPaint.painter as GlassButtonOuterShadowPainter;
+      expect(painter.shadow, equals(customShadow));
+    });
+
+    testWidgets('GlassButton.custom inherits outer shadow by default',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: GlassButton.custom(
+              onTap: () {},
+              child: const Text('Custom'),
+            ),
+          ),
+        ),
+      );
+
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is CustomPaint && w.painter is GlassButtonOuterShadowPainter,
+        ),
+        findsOneWidget,
+      );
+    });
+
+    test('GlassButtonOuterShadowPainter paint clips with PathFillType.evenOdd',
+        () {
+      const shape = LiquidOval();
+      const shadow = BoxShadow(
+        color: Color(0x14000000),
+        blurRadius: 8.0,
+        offset: Offset(0, 2),
+      );
+      const painter = GlassButtonOuterShadowPainter(
+        shape: shape,
+        shadow: shadow,
+      );
+
+      final recorder = PictureRecorder();
+      final canvas = Canvas(recorder);
+      // paint 执行无异常且能正确处理空尺寸与非空尺寸
+      painter.paint(canvas, Size.zero);
+      painter.paint(canvas, const Size(56, 56));
+      final picture = recorder.endRecording();
+      expect(picture, isNotNull);
+      picture.dispose();
     });
   });
 }

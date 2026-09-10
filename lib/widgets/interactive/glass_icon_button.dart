@@ -107,6 +107,8 @@ class GlassIconButton extends StatelessWidget {
     this.focusNode,
     this.autofocus = false,
     this.semanticLabel,
+    this.enableOuterShadow = true,
+    this.outerShadow,
   });
 
   // Default icon colors are resolved at build time from CupertinoColors.label
@@ -237,6 +239,16 @@ class GlassIconButton extends StatelessWidget {
   /// Critical for icon buttons which otherwise have no textual content.
   final String? semanticLabel;
 
+  /// 是否在按钮外部渲染投影阴影。
+  ///
+  /// 转发给底层的 [GlassButton.custom]。默认为 true。
+  final bool enableOuterShadow;
+
+  /// 可选的自定义外部投影 [BoxShadow]。
+  ///
+  /// 转发给底层的 [GlassButton.custom]。
+  final BoxShadow? outerShadow;
+
   @override
   Widget build(BuildContext context) {
     final effectiveIconSize = iconSize ?? (size * 0.5);
@@ -276,6 +288,8 @@ class GlassIconButton extends StatelessWidget {
       focusNode: focusNode,
       autofocus: autofocus,
       label: semanticLabel ?? '',
+      enableOuterShadow: enableOuterShadow,
+      outerShadow: outerShadow,
       child: iconWidget,
     );
   }

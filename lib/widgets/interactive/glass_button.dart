@@ -169,6 +169,8 @@ class GlassButton extends StatefulWidget {
     this.canRequestFocus = true,
     this.excludeFromSemantics = false,
     this.isStationary = false,
+    this.enableOuterShadow = true,
+    this.outerShadow,
   }) : child = null;
 
   /// Creates a glass button with custom content.
@@ -231,6 +233,8 @@ class GlassButton extends StatefulWidget {
     this.canRequestFocus = true,
     this.excludeFromSemantics = false,
     this.isStationary = false,
+    this.enableOuterShadow = true,
+    this.outerShadow,
   })  : icon = null,
         iconSize = 24.0,
         iconColor = null;
@@ -374,6 +378,21 @@ class GlassButton extends StatefulWidget {
   /// Use [GlassButtonStyle.transparent] when grouping buttons to avoid
   /// double-drawing glass backgrounds.
   final GlassButtonStyle style;
+
+  /// 是否在按钮外部渲染投影阴影。
+  ///
+  /// 该阴影采用反向镂空剪裁（evenOdd 规则），仅向按钮外部扩散，
+  /// 绝不绘制到按钮内部，从而避免半透明玻璃底色被阴影污染，保持通透纯净。
+  ///
+  /// 默认为 true。
+  final bool enableOuterShadow;
+
+  /// 可选的自定义外部投影 [BoxShadow]。
+  ///
+  /// 若为 null，则根据当前主题亮度使用默认阴影：
+  /// - 亮色模式：12px 模糊，(0, 2) 偏移，4% 纯黑；
+  /// - 暗色模式：12px 模糊，(0, 2) 偏移，10% 纯黑。
+  final BoxShadow? outerShadow;
 
   // ===========================================================================
   // LiquidStretch Properties (Animation & Interaction)
@@ -952,6 +971,37 @@ class _GlassButtonState extends State<GlassButton>
     final bool skipBoundary = effectiveQuality == GlassQuality.minimal ||
         hasStretch;
 
+    // 构建外部阴影（仅在启用且非透明样式时渲染）
+    // 阴影由 GlassButtonOuterShadowPainter 采用 evenOdd 反向镂空绘制，
+    // 保证 100% 仅呈现在按钮边界之外，绝不污染按钮内部半透明玻璃底色。
+    final Widget surfacedGlassWidget;
+    if (widget.enableOuterShadow &&
+        widget.style != GlassButtonStyle.transparent) {
+      final effectiveOuterShadow = widget.outerShadow ??
+          GlassDefaults.defaultOuterShadow(
+            GlassTheme.brightnessOf(context),
+          );
+      surfacedGlassWidget = Stack(
+        clipBehavior: Clip.none,
+        alignment: widget.alignment,
+        children: [
+          Positioned.fill(
+            child: IgnorePointer(
+              child: CustomPaint(
+                painter: GlassButtonOuterShadowPainter(
+                  shape: widget.shape,
+                  shadow: effectiveOuterShadow,
+                ),
+              ),
+            ),
+          ),
+          glassWidget,
+        ],
+      );
+    } else {
+      surfacedGlassWidget = glassWidget;
+    }
+
     final stretchContent = LiquidStretch(
       // A fixed factor when one is given; otherwise the native sizing.
       interactionScale: effectiveInteractionScale ?? 1.0,
@@ -971,7 +1021,7 @@ class _GlassButtonState extends State<GlassButton>
       anchorStretchSettings: widget.anchorStretchSettings ??
           themeInteraction.anchorStretchSettings ??
           AnchorStretchSettings.nativeTremor,
-      child: glassWidget,
+      child: surfacedGlassWidget,
     );
 
     final stretchWidget =
@@ -1081,4 +1131,64 @@ class _ExpandedShapeClipper extends CustomClipper<Path> {
   @override
   bool shouldReclip(_ExpandedShapeClipper oldClipper) =>
       shape != oldClipper.shape || expansion != oldClipper.expansion;
+}
+
+/// 玻璃按钮外部阴影画笔
+///
+/// 使用奇偶剪裁（[PathFillType.evenOdd]）从剪裁区域中严格扣除按钮内部区域，
+/// 确保阴影只在按钮外部呈现，绝不渗透至半透明玻璃本体内部，
+/// 避免半透明玻璃因内部阴影变脏、发灰，保持通透纯净。
+@visibleForTesting
+class GlassButtonOuterShadowPainter extends CustomPainter {
+  /// 创建玻璃按钮外部阴影画笔
+  const GlassButtonOuterShadowPainter({
+    required this.shape,
+    required this.shadow,
+  });
+
+  /// 按钮轮廓形状
+  final ShapeBorder shape;
+
+  /// 外部阴影配置
+  final BoxShadow shadow;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (size.isEmpty || shadow.color.a <= 0.0) return;
+
+    final Rect rect = Offset.zero & size;
+    final Path buttonPath = shape.getOuterPath(rect);
+
+    // 计算包含阴影扩散、偏移与高斯模糊的安全外接矩形范围
+    final double spreadAndBlur =
+        (shadow.blurRadius + shadow.spreadRadius).abs() + 32.0;
+    final Rect shadowBounds =
+        rect.shift(shadow.offset).inflate(spreadAndBlur);
+    final Rect outerBounds =
+        shadowBounds.expandToInclude(rect.inflate(spreadAndBlur));
+
+    // 使用 evenOdd 规则构建反向剪裁路径：外框包围盒 + 按钮自身形状路径
+    // 在奇偶填充规则下，按钮内部区域的重叠次数为 2（偶数），被彻底镂空；
+    // 按钮外部区域重叠次数为 1（奇数），仅在外部保留绘制。
+    final Path inverseClipPath = Path()
+      ..fillType = PathFillType.evenOdd
+      ..addRect(outerBounds)
+      ..addPath(buttonPath, Offset.zero);
+
+    canvas.save();
+    canvas.clipPath(inverseClipPath);
+
+    // 绘制阴影：位置随 offset 偏移，大小随 spreadRadius 扩展
+    final Rect shadowRect =
+        rect.shift(shadow.offset).inflate(shadow.spreadRadius);
+    final Path shadowPath = shape.getOuterPath(shadowRect);
+    canvas.drawPath(shadowPath, shadow.toPaint());
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant GlassButtonOuterShadowPainter oldDelegate) {
+    return shape != oldDelegate.shape || shadow != oldDelegate.shadow;
+  }
 }

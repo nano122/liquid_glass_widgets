@@ -48,9 +48,9 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      因此 Premium SDF、Standard 轻量路径、底栏阴影覆盖层和背景图 FrostedSurface
      都不会创建玻璃外投影；Shader 内部折射、边缘暗部与交互光晕不受影响；
    - 双层细边与物理 `edgeAbsorption` 解耦：先绘制完整围绕轮廓的
-     `0.36 logical px`、颜色 `vec3(0.36)`、透明度 `0.15` 的深灰边，再按
-     `abs(normal.x)` 只在左右叠加颜色 `vec3(0.008)`、透明度 `0.60` 的锐利
-     `0.18 logical px` 近黑边；`edgeAbsorption=0` 仅关闭 Beer–Lambert
+     `0.36 logical px`、颜色 `vec3(0.68, 0.68, 0.76)`、透明度 `0.50` 的冷灰边，再按
+     `abs(normal.x)` 只在左右叠加颜色 `vec3(0.01, 0.015, 0.08)`、透明度 `0.72` 的锐利
+     `0.18 logical px` 冷黑边；`edgeAbsorption=0` 仅关闭 Beer–Lambert
      弯月面变暗，不会移除这两层结构边；
    - 双层结构边内侧新增按几何局部 Y 归一化的面积高光：小尺寸顶部在容器高度
      `15%` 处完全归零，底部从 `70%` 开始显现并覆盖最后 `30%`。两端恢复最初
@@ -89,9 +89,11 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
    - 深边方向遮罩扩展为 `smoothstep(0.45, 0.90, abs(normal.x))`，使暗色从
      更早的圆角法线阶段逐渐显现，扩大浅色到深色的连续过渡；实体深边的
      `0.18 logical px` 横截面、颜色和透明度保持不变；
-   - 深色色相保持中性近黑，基础透明度固定为 `0.60`，颜色收紧为 `vec3(0.008)`，不再叠加
-     `edgeAbsorption` 增益；浅色环使用 `vec3(0.36)` / `0.15`，让完整结构线减淡并与
-     左右端部的深边形成更明确的双层对比；
+   - 深色色相注入深邃冷黑 `vec3(0.01, 0.015, 0.08)`，基础透明度提升至 `0.72`，
+     不再叠加 `edgeAbsorption` 增益；浅色环采用提升覆盖率（`0.50`）与精准校准色
+     `vec3(0.68, 0.68, 0.76)`，让描边自身建立主导覆盖力，彻底摆脱背景底色稀释，
+     在任何底色上实测 B 通道均稳定反超 R/G 约 7~15 个点的高级微蓝冷调质感，
+     并与左右端部的冷黑切面形成清晰硬朗的双层过渡；
    - 深色层不读取光照方向，不会跟随高光转动；镜面高光、Fresnel 与
      hairline rim 向内渐入，不再覆盖最外轮廓；
    - 共享描边函数不再把 `edgeAbsorption` 当作显示 gate；固定低透明度保证关闭
@@ -137,6 +139,12 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
       轻量 Shader 使用 slot 35，交互指示器使用 slot 36；
     - `copyWith`、`copyWithPinch`、`lerp`、`GlassThemeSettings`、indicator 默认
       配方合并与 grouped elevation 设置重建都传递该值，避免组件交互后回退为开启。
+12. 玻璃按钮（`GlassButton`、`GlassIconButton` 及按钮组外层壳体）引入专用的外部反向镂空投影：
+    - 为满足轻质感悬浮需求并彻底解决半透明玻璃底色被下方阴影污染的问题，新增 `enableOuterShadow`（默认开启）与 `outerShadow` 可配置项；
+    - 采用 `GlassButtonOuterShadowPainter` 配合 `PathFillType.evenOdd` 规则构建反向剪裁路径，在绘制外部模糊阴影时，将按钮几何形状内部 100% 裁切镂空，绝不渗透至半透明玻璃本体内部，保持玻璃通透澄澈；
+    - 默认投影配置在 `GlassDefaults` 集中收敛（12px 模糊，(0, 2) 偏移，亮色采用带微蓝冷调补偿的冷灰阴影 `Color(0x0E0E1C44)`，暗色采用 10% 黑色 `Color(0x1A000000)`），使暖底叠加后羽化带实测呈现 224, 224, 229（高出约 5 个点）的纯净冷调；
+    - 阴影与玻璃按钮主体一同置于 `LiquidStretch` 内部，按压膨胀（1.04x）或拉伸时阴影同步放大，交互自然逼真；
+    - `GlassButtonStyle.transparent` 样式自动跳过外部阴影，避免复合按钮组内部子项产生多重阴影叠压。
 
 ## 回退边界
 

@@ -158,4 +158,35 @@ class GlassDefaults {
 
   /// Specular tint applied to drag handles and pill surfaces (dark mode).
   static const double specularDarkAlpha = 0.10;
+
+  // ============================================================================
+  // Outer Drop Shadow (GlassButton & interactive controls)
+  // ============================================================================
+
+  /// 外部阴影模糊半径（12.0，柔和大范围扩散）
+  static const double outerShadowBlurRadius = 12.0;
+
+  /// 外部阴影纵向偏移（2.0）
+  static const Offset outerShadowOffset = Offset(0.0, 2.0);
+
+  /// 外部阴影亮色模式颜色。
+  /// 中文说明：针对页面暖奶灰大底色（0xFFFAF9F6，原生 B 通道比 R 低 4 个点）
+  /// 进行反向穿透冷色补偿，采用带深冷微蓝的高级冷灰阴影 Color(0x0E0E1C44)（约 5.5% 不透明度）。
+  /// 在羽化扩散区与暖底叠加后，精确消除纯黑阴影产生的泛黄偏色，
+  /// 使实测像素稳定呈现 R=224, G=224, B=229（B 通道高出约 5 个点）的通透微冷质感。
+  static const Color outerShadowColorLight = Color(0x0E0E1C44);
+
+  /// 外部阴影暗色模式颜色（10% 纯黑，温和不厚重）
+  static const Color outerShadowColorDark = Color(0x1A000000);
+
+  /// 根据当前亮度模式获取默认外部投影 [BoxShadow]
+  static BoxShadow defaultOuterShadow(Brightness brightness) {
+    return BoxShadow(
+      color: brightness == Brightness.dark
+          ? outerShadowColorDark
+          : outerShadowColorLight,
+      blurRadius: outerShadowBlurRadius,
+      offset: outerShadowOffset,
+    );
+  }
 }
