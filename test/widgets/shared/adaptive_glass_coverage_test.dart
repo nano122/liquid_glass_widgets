@@ -272,6 +272,43 @@ void main() {
       await tester.pump();
       expect(find.byType(SizedBox), findsWidgets);
     });
+
+    testWidgets('elevation 设置重建不会重新开启折射', (tester) async {
+      const disabledSettings = LiquidGlassSettings(
+        blur: 5,
+        refractionEnabled: false,
+      );
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: LiquidGlassWidgets.wrap(
+            child: InheritedLiquidGlass(
+              settings: disabledSettings,
+              quality: GlassQuality.standard,
+              isBlurProvidedByAncestor: true,
+              child: const SizedBox(
+                width: 200,
+                height: 100,
+                child: AdaptiveGlass(
+                  shape: _shape,
+                  settings: disabledSettings,
+                  quality: GlassQuality.standard,
+                  allowElevation: true,
+                  child: SizedBox.expand(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      // 中文注释：祖先提供 blur 时 AdaptiveGlass 会重建轻量设置并增强光照；
+      // 检查 Shader 宿主收到的值，避免这个分支被构造器默认 true 覆盖。
+      final lightweight = tester.widget<LightweightLiquidGlass>(
+        find.byType(LightweightLiquidGlass).first,
+      );
+      expect(lightweight.settings!.refractionEnabled, isFalse);
+    });
   });
 
   group('_FrostedFallback edge cases', () {

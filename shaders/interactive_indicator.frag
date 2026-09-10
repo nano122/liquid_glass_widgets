@@ -54,6 +54,7 @@ uniform vec4 uData7; // 28..31 (baseAlphaMultiplier, edgeAlphaMultiplier, rimThi
 // 33:  uEdgeAbsorption — Beer-Lambert meniscus rim darkening strength [0..1]
 // 34:  uPinchStrength — animated concave lens pinch [0..1]
 // 35:  uVisibility — glass fade, kept separate from transparent tint colours
+// 36:  uRefractionEnabled — background refraction/dispersion sampling gate
 
 uniform sampler2D uTexture;         // Captured background image
 
@@ -75,6 +76,10 @@ uniform float uPinchStrength;
 // 35: Explicit visibility. The default indicator tint can be fully transparent,
 // so tint alpha cannot also carry the glass fade without losing the lens body.
 uniform float uVisibility;
+
+// 36: 中文说明：只关闭背景采样坐标的 edge bend、pinch 与 RGB 色散；
+// indicator 的形状动画、材质 alpha、光照、Fresnel 和双层边仍正常渲染。
+uniform float uRefractionEnabled;
 
 out vec4 fragColor;
 
@@ -321,6 +326,9 @@ void main() {
   //   0.35 means max offset is 35% of widget height
   //   Increase for more dramatic effect, decrease for subtler
   vec2 edgeOffsetLogical = surfaceNormal * edgeInfluence * bendStrength * uSize.y * 0.35;
+  // 中文说明：不要通过归零 thickness 模拟关闭折射，因为 thickness 还控制
+  // rim 深度；这里只归零将要施加到背景纹理坐标上的位移。
+  edgeOffsetLogical *= uRefractionEnabled;
   // Standard 只使用 Dart 显式绑定的纹理；Premium 的实时采样与坐标变换由
   // liquid_glass_final_render.frag 和官方 LiquidGlassLayer 统一负责。
   #ifdef LGR_GLES_FLIP_SAMPLE_Y
@@ -333,7 +341,7 @@ void main() {
   // 中文说明：直接在解析式 SDF 上计算凹透镜 pinch，不再依赖几何 matte。
   // L4 superellipse 让宽胶囊的上下边保持平直，mask 把偏移在 AA 边缘羽化为
   // 零，避免玻璃内外背景坐标突然跳变。该公式与完整 Premium Shader 同源。
-  if (uPinchStrength > 0.001) {
+  if (uRefractionEnabled > 0.5 && uPinchStrength > 0.001) {
     vec2 geometryUv = localLogical / uSize;
     vec2 centered = geometryUv - vec2(0.5);
     vec2 absCentered = abs(centered) * 2.0;
@@ -352,12 +360,15 @@ void main() {
   // Red shifts one way, blue shifts the opposite, green stays centered.
   
   // TWEAK: (0.12) - subtle chromatic shift for "Apple style" refraction
-  vec2 distort = surfaceNormal * edgeInfluence * uChromaticAberration;
+  // 中文说明：色散和折射使用同一个总开关，但不修改调用者保存的色散强度。
+  float effectiveChromaticAberration =
+      uChromaticAberration * uRefractionEnabled;
+  vec2 distort = surfaceNormal * edgeInfluence * effectiveChromaticAberration;
   vec2 chromaticShift = distort * 0.12; 
   
   vec3 bg;
   if (uHasBackground > 0.5) {
-    if (uChromaticAberration < 0.001) {
+    if (effectiveChromaticAberration < 0.001) {
       // No chromatic aberration — one hardware-filtered texture fetch.
       bg = sampleBackground(refractedUv, physBgSize).rgb;
     } else {

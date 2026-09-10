@@ -219,6 +219,12 @@ class AnimatedGlassIndicator extends StatelessWidget {
           override.chromaticAberration != _settingsDefaults.chromaticAberration
               ? override.chromaticAberration
               : null,
+      // 中文说明：indicator 会把调用者设置合并到专用默认配方；必须显式识别
+      // false，否则拖动/按压触发重建时会从默认配方重新打开背景折射。
+      refractionEnabled:
+          override.refractionEnabled != _settingsDefaults.refractionEnabled
+              ? override.refractionEnabled
+              : null,
       lightAngle: override.lightAngle != _settingsDefaults.lightAngle
           ? override.lightAngle
           : null,

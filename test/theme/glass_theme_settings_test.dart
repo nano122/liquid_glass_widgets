@@ -92,5 +92,39 @@ void main() {
       expect(settingsA.hashCode, equals(settingsB.hashCode));
       expect(settingsA.hashCode, isNot(equals(settingsC.hashCode)));
     });
+
+    test('refractionEnabled 可由主题关闭且空主题保持组件值', () {
+      const disabledBase = LiquidGlassSettings(refractionEnabled: false);
+      const enabledBase = LiquidGlassSettings(refractionEnabled: true);
+
+      // 中文注释：空主题不能覆盖组件自己的关闭决定；显式主题值则应能用于
+      // 整个子树统一关闭折射，同时不触碰 blur、色调和光照等其他参数。
+      expect(
+        const GlassThemeSettings().applyTo(disabledBase).refractionEnabled,
+        isFalse,
+      );
+      final themed = const GlassThemeSettings(
+        refractionEnabled: false,
+      ).applyTo(enabledBase);
+      expect(themed.refractionEnabled, isFalse);
+      expect(themed.blur, enabledBase.blur);
+      expect(themed.lightIntensity, enabledBase.lightIntensity);
+    });
+
+    test('refractionEnabled 参与主题 copyWith、lerp 和相等性', () {
+      const enabled = GlassThemeSettings(refractionEnabled: true);
+      const disabled = GlassThemeSettings(refractionEnabled: false);
+
+      expect(enabled.copyWith(refractionEnabled: false), disabled);
+      expect(
+        GlassThemeSettings.lerp(enabled, disabled, 0.49)!.refractionEnabled,
+        isTrue,
+      );
+      expect(
+        GlassThemeSettings.lerp(enabled, disabled, 0.5)!.refractionEnabled,
+        isFalse,
+      );
+      expect(enabled, isNot(equals(disabled)));
+    });
   });
 }

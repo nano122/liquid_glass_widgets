@@ -363,6 +363,9 @@ class AdaptiveGlass extends StatelessWidget {
               lightIntensity: (normalizedSettings.effectiveLightIntensity * 1.2)
                   .clamp(0.0, 10.0),
               chromaticAberration: normalizedSettings.chromaticAberration,
+              // 中文说明：分组 elevation 会重建一份轻量设置；透传开关避免
+              // 嵌套按钮在获得层级增强时意外恢复背景折射。
+              refractionEnabled: normalizedSettings.refractionEnabled,
               blur: normalizedSettings.effectiveBlur,
               visibility: normalizedSettings.visibility,
               saturation: normalizedSettings.effectiveSaturation,

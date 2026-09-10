@@ -594,6 +594,41 @@ GlassPage(
 > 
 > **Tip for `edgeToEdge` on Android:** When `true`, content draws underneath the Android navigation bar. Remember to wrap your `Scaffold` body in a `SafeArea` (or use `extendBody: true` and pad the bottom) so your content isn't hidden behind the system buttons.
 
+### Disable Refraction Without Disabling Glass
+
+When a glass component has no meaningful background to refract, disable only
+the background lens sampling with `LiquidGlassSettings.refractionEnabled`:
+
+```dart
+GlassCard(
+  settings: const LiquidGlassSettings(
+    refractionEnabled: false,
+    glassColor: Color(0x24FFFFFF),
+  ),
+  child: const Text('Glass material, no background distortion'),
+)
+```
+
+With `refractionEnabled: false`, background displacement, chromatic dispersion,
+and interactive indicator pinch sampling are disabled. Blur, tint, saturation,
+lighting, Fresnel, edge absorption, whitening, shape, and interactive geometry
+continue to render normally. Existing no-backdrop fallback rules still apply:
+Standard uses its synthetic body based on `glassColor`, while Premium resolves
+empty backdrop regions through `platformViewFallbackColor`, then `backerColor`,
+and finally the historical fallback.
+
+This is also available as a nullable theme override:
+
+```dart
+GlassThemeVariant(
+  settings: GlassThemeSettings(refractionEnabled: false),
+)
+```
+
+The default is `true`, so existing surfaces are unchanged. This switch keeps the
+glass shader active; use `GlassQuality.minimal` when you need a shader-free
+surface instead.
+
 ### Specular Sharpness
 
 Control the tightness of the specular highlight on any glass surface via `LiquidGlassSettings.specularSharpness`:
@@ -856,7 +891,7 @@ This disables only the automatic system-flag bridge. An explicit `GlassAccessibi
 On Impeller, every `GlassQuality.premium` surface uses a two-pass pipeline:
 
 1. **Blur pass** — `BackdropFilterLayer(ImageFilter.blur)`, clipped to the exact widget shape. Each `LiquidGlassLayer` manages its own isolated `BackdropGroup` for GPU capture.
-2. **Shader pass** — `BackdropFilterLayer(ImageFilter.shader)` — refraction, edge lighting, glass tint, and chromatic aberration.
+2. **Shader pass** — `BackdropFilterLayer(ImageFilter.shader)` — refraction, edge lighting, glass tint, and chromatic aberration. With `refractionEnabled: false`, this pass remains active for the material channels but samples the backdrop at its original coordinates with no dispersion.
 
 On Skia/Web, `lightweight_glass.frag` runs as a single pass with no backdrop capture.
 

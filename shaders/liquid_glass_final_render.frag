@@ -116,6 +116,10 @@ uniform vec4 uAnalyticInverseY;
 // 0 = fallbackColor（默认），1 = passthrough。
 uniform float uPlatformViewMode;
 
+// Slot 45：背景折射总开关。关闭时背景仍以原坐标参与 tint、饱和度和亮度
+// 自适应，但不再发生法线位移、RGB 色散或 indicator pinch；材质其余阶段不变。
+uniform float uRefractionEnabled;
+
 // uThickness directly and is already DPR-independent).
 // uniform float uRefractScale; // Removed in favor of scaling uThickness
 
@@ -566,6 +570,9 @@ void main() {
     #ifdef LGR_GLES_FLIP_SAMPLE_Y
         displacement.y = -displacement.y;
     #endif
+    // 中文说明：只归零背景采样位移，保留 normal、height 与 thickness 供后续
+    // 光照、Fresnel、弯月面吸收和结构边使用，避免关闭折射时材质外观突变。
+    displacement *= uRefractionEnabled;
 
     // ── Concave horizontal pinch ──────────────────────────────────────────────
     // iOS 26 indicator pills make the bar content behind the left/right edges
@@ -580,7 +587,7 @@ void main() {
     // 0.015 UV on a 390pt screen ≈ 6pt logical pixels — subtle but visible.
     //
     // ── iOS 26 Concave Lens Pinch ─────────────────────────────────────────────
-    if (uPinchStrength > 0.001) {
+    if (uRefractionEnabled > 0.5 && uPinchStrength > 0.001) {
         // We cannot use normalXY because it is 0.0 in the flat interior of the pill,
         // which prevents the background from being pinched at all.
         // We also cannot use a circular distance field, because a circle mapped to a
@@ -641,14 +648,18 @@ void main() {
     // a normal tilted < 0.6° from vertical — visually indistinguishable from a
     // zero-displacement sample at any display resolution.
     vec4 refractColor;
+    // 中文说明：色散是折射采样的一部分。此处使用局部有效值，不覆盖 uniform
+    // 中的艺术配置，开关恢复后原有色散强度会完整返回。
+    float effectiveChromaticAberration =
+        uChromaticAberration * uRefractionEnabled;
     if (dot(normalXY, normalXY) < 1e-4) {
         // Flat interior — zero displacement, sample directly.
         refractColor = textureBilinear(screenUV, physTexSize, invTexSize);
-    } else if (uChromaticAberration < 0.01) {
+    } else if (effectiveChromaticAberration < 0.01) {
         vec2 refractedUV = screenUV + displacement * invTexSize;
         refractColor = textureBilinear(refractedUV, physTexSize, invTexSize);
     } else {
-        float dispersionStrength = uChromaticAberration * 0.5;
+        float dispersionStrength = effectiveChromaticAberration * 0.5;
         vec2 redOffset  = displacement * (1.0 + dispersionStrength);
         vec2 blueOffset = displacement * (1.0 - dispersionStrength);
 

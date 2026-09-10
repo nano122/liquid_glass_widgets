@@ -1201,5 +1201,9 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     // Slot 35: 显式可见度。indicator 的 glassColor 可以是全透明，不能借用
     // tint alpha 表达淡入淡出，否则捕获到背景后玻璃会在首帧突然跳到高不透明度。
     _shader.setFloat(index++, _settings.visibility.clamp(0.0, 1.0));
+
+    // Slot 36: 背景折射总开关。只交给 Shader 局部屏蔽 edge bend、pinch
+    // 与色散，indicator 的交互形变和全部光照通道仍按原设置执行。
+    _shader.setFloat(index++, _settings.refractionEnabled ? 1.0 : 0.0);
   }
 }

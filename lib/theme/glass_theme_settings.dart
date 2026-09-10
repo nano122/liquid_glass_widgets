@@ -50,6 +50,7 @@ class GlassThemeSettings {
     this.thickness,
     this.blur,
     this.chromaticAberration,
+    this.refractionEnabled,
     this.lightAngle,
     this.lightIntensity,
     this.ambientStrength,
@@ -74,6 +75,9 @@ class GlassThemeSettings {
 
   /// See [LiquidGlassSettings.chromaticAberration].
   final double? chromaticAberration;
+
+  /// See [LiquidGlassSettings.refractionEnabled].
+  final bool? refractionEnabled;
 
   /// See [LiquidGlassSettings.lightAngle].
   final double? lightAngle;
@@ -104,29 +108,24 @@ class GlassThemeSettings {
   /// Only non-null fields in this override replace the corresponding
   /// value in [base]. Null fields leave [base]'s value untouched.
   LiquidGlassSettings applyTo(LiquidGlassSettings base) {
-    return LiquidGlassSettings(
-      visibility: visibility ?? base.visibility,
-      glassColor: glassColor ?? base.glassColor,
-      thickness: thickness ?? base.thickness,
-      blur: blur ?? base.blur,
-      chromaticAberration: chromaticAberration ?? base.chromaticAberration,
-      lightAngle: lightAngle ?? base.lightAngle,
-      lightIntensity: lightIntensity ?? base.lightIntensity,
-      ambientStrength: ambientStrength ?? base.ambientStrength,
-      ambientRim: base.ambientRim,
-      fresnelStrength: fresnelStrength ?? base.fresnelStrength,
-      refractiveIndex: refractiveIndex ?? base.refractiveIndex,
-      saturation: saturation ?? base.saturation,
-      glowIntensity: base.glowIntensity,
-      specularSharpness: specularSharpness ?? base.specularSharpness,
-      standardOpacityMultiplier: base.standardOpacityMultiplier,
-      shadowElevation: base.shadowElevation,
-      shadow: base.shadow,
-      whitenStrength: base.whitenStrength,
-      whitenGated: base.whitenGated,
-      edgeAbsorption: edgeAbsorption ?? base.edgeAbsorption,
-      backerColor: base.backerColor,
-      platformViewFallbackColor: base.platformViewFallbackColor,
+    // 中文说明：从 base.copyWith 合并，而不是重新调用完整构造器。这样主题只
+    // 覆盖自己声明的字段，pinch、PlatformView 模式及后续新增字段都不会因为
+    // 构造器默认值而被静默重置，符合 partial override 的契约。
+    return base.copyWith(
+      visibility: visibility,
+      glassColor: glassColor,
+      thickness: thickness,
+      blur: blur,
+      chromaticAberration: chromaticAberration,
+      refractionEnabled: refractionEnabled,
+      lightAngle: lightAngle,
+      lightIntensity: lightIntensity,
+      ambientStrength: ambientStrength,
+      fresnelStrength: fresnelStrength,
+      refractiveIndex: refractiveIndex,
+      saturation: saturation,
+      specularSharpness: specularSharpness,
+      edgeAbsorption: edgeAbsorption,
     );
   }
 
@@ -161,6 +160,9 @@ class GlassThemeSettings {
       blur: _lerpDoubleField(a.blur, b.blur, t),
       chromaticAberration:
           _lerpDoubleField(a.chromaticAberration, b.chromaticAberration, t),
+      // 中文说明：布尔主题覆盖无法数值插值；中点前后分别沿用两端，且 null
+      // 继续表示“不覆盖组件设置”。
+      refractionEnabled: t < 0.5 ? a.refractionEnabled : b.refractionEnabled,
       lightAngle: _lerpDoubleField(a.lightAngle, b.lightAngle, t),
       lightIntensity: _lerpDoubleField(a.lightIntensity, b.lightIntensity, t),
       ambientStrength:
@@ -192,6 +194,7 @@ class GlassThemeSettings {
     double? thickness,
     double? blur,
     double? chromaticAberration,
+    bool? refractionEnabled,
     double? lightAngle,
     double? lightIntensity,
     double? ambientStrength,
@@ -207,6 +210,7 @@ class GlassThemeSettings {
       thickness: thickness ?? this.thickness,
       blur: blur ?? this.blur,
       chromaticAberration: chromaticAberration ?? this.chromaticAberration,
+      refractionEnabled: refractionEnabled ?? this.refractionEnabled,
       lightAngle: lightAngle ?? this.lightAngle,
       lightIntensity: lightIntensity ?? this.lightIntensity,
       ambientStrength: ambientStrength ?? this.ambientStrength,
@@ -228,6 +232,7 @@ class GlassThemeSettings {
           thickness == other.thickness &&
           blur == other.blur &&
           chromaticAberration == other.chromaticAberration &&
+          refractionEnabled == other.refractionEnabled &&
           lightAngle == other.lightAngle &&
           lightIntensity == other.lightIntensity &&
           ambientStrength == other.ambientStrength &&
@@ -244,6 +249,7 @@ class GlassThemeSettings {
         thickness,
         blur,
         chromaticAberration,
+        refractionEnabled,
         lightAngle,
         lightIntensity,
         ambientStrength,
@@ -260,6 +266,7 @@ class GlassThemeSettings {
       'thickness: $thickness, '
       'blur: $blur, '
       'glassColor: $glassColor, '
+      'refractionEnabled: $refractionEnabled, '
       'edgeAbsorption: $edgeAbsorption'
       ')';
 }

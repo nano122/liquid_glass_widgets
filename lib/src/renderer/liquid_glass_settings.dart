@@ -54,6 +54,7 @@ class LiquidGlassSettings {
     this.thickness = 20,
     this.blur = 5,
     this.chromaticAberration = .01,
+    this.refractionEnabled = true,
     this.lightAngle = GlassDefaults.lightAngle,
     this.lightIntensity = .5,
     this.ambientStrength = 0,
@@ -87,6 +88,7 @@ class LiquidGlassSettings {
     required this.thickness,
     required this.blur,
     required this.chromaticAberration,
+    required this.refractionEnabled,
     required this.lightAngle,
     required this.lightIntensity,
     required this.ambientStrength,
@@ -133,22 +135,24 @@ class LiquidGlassSettings {
     Color glassColor = const Color.fromARGB(0, 255, 255, 255),
     GlassSpecularSharpness specularSharpness = GlassSpecularSharpness.medium,
     double standardOpacityMultiplier = 1.0,
+    bool refractionEnabled = true,
   }) : this(
-         visibility: visibility,
-         refractiveIndex: 1 + (refraction / 100) * 0.2,
-         thickness: depth,
-         chromaticAberration: 4 * (dispersion / 100),
-         lightIntensity: lightIntensity / 100,
-         blur: frost,
-         lightAngle: lightAngle,
-         ambientStrength: 0.1,
-         saturation: 1.5,
-         glassColor: glassColor,
-         specularSharpness: specularSharpness,
-         standardOpacityMultiplier: standardOpacityMultiplier,
-         // shadowElevation and shadow use their defaults (0.0 / null); the
-         // fork's centralized policy keeps all glass surfaces shadowless.
-       );
+          visibility: visibility,
+          refractiveIndex: 1 + (refraction / 100) * 0.2,
+          thickness: depth,
+          chromaticAberration: 4 * (dispersion / 100),
+          refractionEnabled: refractionEnabled,
+          lightIntensity: lightIntensity / 100,
+          blur: frost,
+          lightAngle: lightAngle,
+          ambientStrength: 0.1,
+          saturation: 1.5,
+          glassColor: glassColor,
+          specularSharpness: specularSharpness,
+          standardOpacityMultiplier: standardOpacityMultiplier,
+          // shadowElevation and shadow use their defaults (0.0 / null); the
+          // fork's centralized policy keeps all glass surfaces shadowless.
+        );
 
   /// Retrieves the nearest [LiquidGlassSettings] from the widget tree.
   ///
@@ -231,6 +235,18 @@ class LiquidGlassSettings {
 
   /// The effective chromatic aberration taking visibility into account.
   double get effectiveChromaticAberration => chromaticAberration * visibility;
+
+  /// 是否启用背景折射采样。
+  ///
+  /// 设为 `false` 时，三条 Shader 渲染路径都会使用未位移的背景坐标，并关闭
+  /// 色散与 indicator pinch 对背景采样坐标的偏移；模糊、玻璃色、饱和度、
+  /// 光照、Fresnel、边缘吸收、白化、形状与交互形变仍按原设置渲染。
+  ///
+  /// 该开关不会改写 [refractiveIndex]、[chromaticAberration] 或内部的
+  /// [pinchStrength]。因此稍后重新开启时，原有光学参数会立即恢复。
+  ///
+  /// 默认为 `true`，保证现有组件行为不变。
+  final bool refractionEnabled;
 
   /// The angle of the light source in radians.
   ///
@@ -465,6 +481,7 @@ class LiquidGlassSettings {
         thickness: thickness,
         blur: blur,
         chromaticAberration: chromaticAberration,
+        refractionEnabled: refractionEnabled,
         lightAngle: lightAngle,
         lightIntensity: lightIntensity,
         ambientStrength: ambientStrength,
@@ -568,6 +585,9 @@ class LiquidGlassSettings {
         b.chromaticAberration,
         t,
       )!,
+      // 中文说明：布尔开关没有连续中间态，沿用枚举字段的中点切换规则；
+      // 光学数值仍独立插值，重新启用时不会丢失过渡后的配置。
+      refractionEnabled: t < 0.5 ? a.refractionEnabled : b.refractionEnabled,
       lightAngle: lerpDouble(a.lightAngle, b.lightAngle, t)!,
       lightIntensity: lerpDouble(a.lightIntensity, b.lightIntensity, t)!,
       ambientStrength: lerpDouble(a.ambientStrength, b.ambientStrength, t)!,
@@ -619,6 +639,7 @@ class LiquidGlassSettings {
     double? thickness,
     double? blur,
     double? chromaticAberration,
+    bool? refractionEnabled,
     double? blend,
     double? lightAngle,
     double? lightIntensity,
@@ -638,34 +659,36 @@ class LiquidGlassSettings {
     Color? backerColor,
     Color? platformViewFallbackColor,
     PlatformViewGlassMode? platformViewMode,
-  }) => LiquidGlassSettings._withPinch(
-    visibility: visibility ?? this.visibility,
-    glassColor: glassColor ?? this.glassColor,
-    thickness: thickness ?? this.thickness,
-    blur: blur ?? this.blur,
-    chromaticAberration: chromaticAberration ?? this.chromaticAberration,
-    lightAngle: lightAngle ?? this.lightAngle,
-    lightIntensity: lightIntensity ?? this.lightIntensity,
-    ambientStrength: ambientStrength ?? this.ambientStrength,
-    ambientRim: ambientRim ?? this.ambientRim,
-    fresnelStrength: fresnelStrength ?? this.fresnelStrength,
-    refractiveIndex: refractiveIndex ?? this.refractiveIndex,
-    saturation: saturation ?? this.saturation,
-    glowIntensity: glowIntensity ?? this.glowIntensity,
-    specularSharpness: specularSharpness ?? this.specularSharpness,
-    standardOpacityMultiplier:
-        standardOpacityMultiplier ?? this.standardOpacityMultiplier,
-    shadowElevation: shadowElevation ?? this.shadowElevation,
-    shadow: shadow ?? this.shadow,
-    whitenStrength: whitenStrength ?? this.whitenStrength,
-    whitenGated: whitenGated ?? this.whitenGated,
-    edgeAbsorption: edgeAbsorption ?? this.edgeAbsorption,
-    backerColor: backerColor ?? this.backerColor,
-    platformViewFallbackColor:
-        platformViewFallbackColor ?? this.platformViewFallbackColor,
-    platformViewMode: platformViewMode ?? this.platformViewMode,
-    pinchStrength: pinchStrength,
-  );
+  }) =>
+      LiquidGlassSettings._withPinch(
+        visibility: visibility ?? this.visibility,
+        glassColor: glassColor ?? this.glassColor,
+        thickness: thickness ?? this.thickness,
+        blur: blur ?? this.blur,
+        chromaticAberration: chromaticAberration ?? this.chromaticAberration,
+        refractionEnabled: refractionEnabled ?? this.refractionEnabled,
+        lightAngle: lightAngle ?? this.lightAngle,
+        lightIntensity: lightIntensity ?? this.lightIntensity,
+        ambientStrength: ambientStrength ?? this.ambientStrength,
+        ambientRim: ambientRim ?? this.ambientRim,
+        fresnelStrength: fresnelStrength ?? this.fresnelStrength,
+        refractiveIndex: refractiveIndex ?? this.refractiveIndex,
+        saturation: saturation ?? this.saturation,
+        glowIntensity: glowIntensity ?? this.glowIntensity,
+        specularSharpness: specularSharpness ?? this.specularSharpness,
+        standardOpacityMultiplier:
+            standardOpacityMultiplier ?? this.standardOpacityMultiplier,
+        shadowElevation: shadowElevation ?? this.shadowElevation,
+        shadow: shadow ?? this.shadow,
+        whitenStrength: whitenStrength ?? this.whitenStrength,
+        whitenGated: whitenGated ?? this.whitenGated,
+        edgeAbsorption: edgeAbsorption ?? this.edgeAbsorption,
+        backerColor: backerColor ?? this.backerColor,
+        platformViewFallbackColor:
+            platformViewFallbackColor ?? this.platformViewFallbackColor,
+        platformViewMode: platformViewMode ?? this.platformViewMode,
+        pinchStrength: pinchStrength,
+      );
 
   @override
   bool operator ==(Object other) {
@@ -677,6 +700,7 @@ class LiquidGlassSettings {
         other.thickness == thickness &&
         other.blur == blur &&
         other.chromaticAberration == chromaticAberration &&
+        other.refractionEnabled == refractionEnabled &&
         other.lightAngle == lightAngle &&
         other.lightIntensity == lightIntensity &&
         other.ambientStrength == ambientStrength &&
@@ -700,29 +724,30 @@ class LiquidGlassSettings {
 
   @override
   int get hashCode => Object.hashAll([
-    visibility,
-    glassColor,
-    thickness,
-    blur,
-    chromaticAberration,
-    lightAngle,
-    lightIntensity,
-    ambientStrength,
-    ambientRim,
-    fresnelStrength,
-    refractiveIndex,
-    saturation,
-    glowIntensity,
-    specularSharpness,
-    standardOpacityMultiplier,
-    shadowElevation,
-    shadow == null ? null : Object.hashAll(shadow!),
-    whitenStrength,
-    whitenGated,
-    edgeAbsorption,
-    backerColor,
-    platformViewFallbackColor,
-    platformViewMode,
-    pinchStrength,
-  ]);
+        visibility,
+        glassColor,
+        thickness,
+        blur,
+        chromaticAberration,
+        refractionEnabled,
+        lightAngle,
+        lightIntensity,
+        ambientStrength,
+        ambientRim,
+        fresnelStrength,
+        refractiveIndex,
+        saturation,
+        glowIntensity,
+        specularSharpness,
+        standardOpacityMultiplier,
+        shadowElevation,
+        shadow == null ? null : Object.hashAll(shadow!),
+        whitenStrength,
+        whitenGated,
+        edgeAbsorption,
+        backerColor,
+        platformViewFallbackColor,
+        platformViewMode,
+        pinchStrength,
+      ]);
 }

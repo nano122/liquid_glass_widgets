@@ -54,8 +54,7 @@ List<double>? _textureGeometryUniformValues({
 
   final storage = layerToScreen.storage;
   const epsilon = 1e-9;
-  final isTwoDimensionalAffine =
-      storage[3].abs() < epsilon &&
+  final isTwoDimensionalAffine = storage[3].abs() < epsilon &&
       storage[7].abs() < epsilon &&
       storage[11].abs() < epsilon &&
       (storage[15] - 1.0).abs() < epsilon;
@@ -104,17 +103,17 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
     ui.Image? captureImage,
     Offset captureOriginInScreenSpace = Offset.zero,
     bool preferAnalyticRoundedRectangle = false,
-  }) : _settings = settings,
-       _devicePixelRatio = devicePixelRatio,
-       _backdropKey = backdropKey,
-       _captureImage = captureImage,
-       _captureOriginInScreenSpace = captureOriginInScreenSpace,
-       _preferAnalyticRoundedRectangle = preferAnalyticRoundedRectangle,
-       _link = link,
-       _cachedLightDir = Offset(
-         cos(settings.lightAngle),
-         -sin(settings.lightAngle),
-       );
+  })  : _settings = settings,
+        _devicePixelRatio = devicePixelRatio,
+        _backdropKey = backdropKey,
+        _captureImage = captureImage,
+        _captureOriginInScreenSpace = captureOriginInScreenSpace,
+        _preferAnalyticRoundedRectangle = preferAnalyticRoundedRectangle,
+        _link = link,
+        _cachedLightDir = Offset(
+          cos(settings.lightAngle),
+          -sin(settings.lightAngle),
+        );
 
   final FragmentShader renderShader;
 
@@ -403,9 +402,8 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
       );
     } else {
       final analyticGeometry = _activeAnalyticGeometry;
-      final geometrySampler = analyticGeometry != null
-          ? _analyticSamplerImage
-          : _geometryImage;
+      final geometrySampler =
+          analyticGeometry != null ? _analyticSamplerImage : _geometryImage;
       if (geometrySampler case final geometryImage?) {
         // Map the texture to exactly the bounds it was originally built for
         // (_geometryLocalBounds) rather than the newly expanding current frame
@@ -481,8 +479,7 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
           })
           // Slots 22-25: uBackgroundFallback (straight RGBA).
           ..setFloatUniforms(initialIndex: 22, (value) {
-            final b =
-                settings.platformViewFallbackColor ??
+            final b = settings.platformViewFallbackColor ??
                 settings.effectiveBackerColor ??
                 const Color(0x00000000);
             value.setFloats(<double>[b.r, b.g, b.b, b.a]);
@@ -517,6 +514,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
                   ? 1.0
                   : 0.0,
             );
+          })
+          // Slot 45：背景折射总开关。普通 backdrop 路径也必须逐次写入，
+          // 防止共享 FragmentShader 沿用上一组件的开关状态。
+          ..setFloatUniforms(initialIndex: 45, (value) {
+            value.setFloat(settings.refractionEnabled ? 1.0 : 0.0);
           })
           ..setImageSampler(
             1,
@@ -562,8 +564,7 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
     // 当前快速路径只接受可精确逆映射的二维仿射变换。遇到透视或退化矩阵时
     // 直接回退 geometry texture，避免用错误坐标换取性能。
     const epsilon = 1e-9;
-    final isTwoDimensionalAffine =
-        storage[3].abs() < epsilon &&
+    final isTwoDimensionalAffine = storage[3].abs() < epsilon &&
         storage[7].abs() < epsilon &&
         storage[11].abs() < epsilon &&
         (storage[15] - 1.0).abs() < epsilon;
@@ -737,8 +738,7 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
           ..setFloat(settings.pinchStrength);
       })
       ..setFloatUniforms(initialIndex: 22, (value) {
-        final b =
-            settings.platformViewFallbackColor ??
+        final b = settings.platformViewFallbackColor ??
             settings.effectiveBackerColor ??
             const Color(0x00000000);
         value.setFloats(<double>[b.r, b.g, b.b, b.a]);
@@ -770,6 +770,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
               ? 1.0
               : 0.0,
         );
+      })
+      // Slot 45：捕获路径同样显式覆盖开关；关闭时仍使用原坐标背景完成
+      // tint、饱和度与光照合成，只跳过折射、pinch 和色散偏移。
+      ..setFloatUniforms(initialIndex: 45, (value) {
+        value.setFloat(settings.refractionEnabled ? 1.0 : 0.0);
       })
       // Slot 0: captured background image (replaces the BackdropFilter read).
       ..setImageSampler(0, capture)

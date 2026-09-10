@@ -446,5 +446,52 @@ void main() {
         expect(a.hashCode, isNot(equals(c.hashCode)));
       });
     });
+
+    group('refractionEnabled', () {
+      test('默认开启，既有组件不改变渲染行为', () {
+        const settings = LiquidGlassSettings();
+        expect(settings.refractionEnabled, isTrue);
+      });
+
+      test('copyWith 和交互 pinch 传递都保留关闭状态', () {
+        const settings = LiquidGlassSettings(refractionEnabled: false);
+
+        // 中文注释：indicator 动画会通过 copyWithPinch 重建完整设置；这里专门
+        // 锁定该路径，防止按压或拖动一开始就把已关闭的折射重新打开。
+        expect(settings.copyWith(blur: 12).refractionEnabled, isFalse);
+        expect(settings.copyWithPinch(0.7).refractionEnabled, isFalse);
+      });
+
+      test('离散开关在 lerp 中点切换并参与相等性', () {
+        const enabled = LiquidGlassSettings(refractionEnabled: true);
+        const disabled = LiquidGlassSettings(refractionEnabled: false);
+
+        expect(
+          LiquidGlassSettings.lerp(enabled, disabled, 0.49).refractionEnabled,
+          isTrue,
+        );
+        expect(
+          LiquidGlassSettings.lerp(enabled, disabled, 0.5).refractionEnabled,
+          isFalse,
+        );
+        expect(enabled, isNot(equals(disabled)));
+      });
+
+      test('figma 构造器允许显式关闭折射', () {
+        const settings = LiquidGlassSettings.figma(
+          refraction: 80,
+          depth: 20,
+          dispersion: 40,
+          frost: 5,
+          refractionEnabled: false,
+        );
+
+        // 中文注释：关闭开关不改写艺术参数本身；以后再次开启时仍应恢复调用者
+        // 配置的折射率与色散，而不是被不可逆地归零。
+        expect(settings.refractionEnabled, isFalse);
+        expect(settings.refractiveIndex, closeTo(1.16, 1e-10));
+        expect(settings.chromaticAberration, closeTo(1.6, 1e-10));
+      });
+    });
   });
 }

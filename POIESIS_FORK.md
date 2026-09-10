@@ -128,11 +128,21 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
     变换追踪修复和 PlatformView 透传模式；其中 PlatformView 的 float uniform
     固定在 slot 44，避开 Poiesis 解析几何占用的 slots 32–43。普通绘制与捕获
     绘制都会显式写入该值，避免复用 FragmentShader 时继承上一帧状态。
+11. `LiquidGlassSettings.refractionEnabled` 提供默认开启的独立折射开关：
+    - `false` 只把 Premium、Standard 与交互指示器三条 Shader 路径的背景
+      法线位移、RGB 色散和 pinch 采样偏移归零；blur、tint、饱和度、光照、
+      Fresnel、边缘吸收、白化、形状与交互几何保持原样；
+    - 折射率、色散强度和 pinch 原始配置不会被改写，重新开启后可直接恢复；
+    - Premium 使用 slot 45，普通 backdrop 与显式 capture 都逐次写入；Standard
+      轻量 Shader 使用 slot 35，交互指示器使用 slot 36；
+    - `copyWith`、`copyWithPinch`、`lerp`、`GlassThemeSettings`、indicator 默认
+      配方合并与 grouped elevation 设置重建都传递该值，避免组件交互后回退为开启。
 
 ## 回退边界
 
 - 解析式 Premium 不依赖背景快照；显式选择 minimal、系统降低透明度或
   PlatformView 安全路径时仍遵循既有无折射回退，`blur: 0` 本身不代表禁用折射。
+  需要保留材质 Shader 但关闭背景折射时使用 `refractionEnabled: false`。
 - superellipse、椭圆、上下非对称圆角以及多形状 metaball 继续使用官方几何
   texture 管线，不用近似轮廓换取性能。
 - 透视、退化或不可逆变换不会强行进入解析式或二维逆仿射分支，自动回退官方

@@ -43,6 +43,10 @@ uniform float uFresnelStrength;
 // 34: uDpr — 独立设备像素比。uScale 还包含 jelly/祖先变换，不能从中反推
 // DPR；屏幕恒宽描边必须用纯 DPR 将 logical px 转成目标物理像素宽度。
 uniform float uDpr;
+// 35: uRefractionEnabled — 仅控制背景采样坐标的折射、色散偏移。
+// 关闭后仍执行同一材质合成、光照、Fresnel、边缘吸收与 tint，避免组件
+// 因没有可折射背景而退化成另一种视觉样式。
+uniform float uRefractionEnabled;
 
 uniform sampler2D uBackground; // The captured background texture
 // Slot 22 (uData5.z): specular sharpness level — passed as float 0.0/1.0/2.0, cast to int.
@@ -547,6 +551,9 @@ void main() {
       //
       // Edge-zone refraction uses the edgeInfluence already computed above.
       vec2 edgeOffset = surfaceNormal * edgeInfluence * uThickness * 0.5;
+      // 中文说明：独立开关只归零背景采样位移，不改写 thickness；后者仍用于
+      // rim、Fresnel 与材质深度计算，确保关闭折射后其余观感保持一致。
+      edgeOffset *= uRefractionEnabled;
       vec2 refractedUV = uv + edgeOffset / uBackgroundSize;
 
       // On pre-3.46 OpenGL ES the background texture uses bottom-left Y origin;
@@ -557,7 +564,11 @@ void main() {
       #endif
 
       vec3 bgRgb;
-      if (uChromaticAberration < 0.001) {
+      // 中文说明：色散属于折射采样的一部分。保留原始配置值，只在本次采样
+      // 局部乘开关；重新开启时无需恢复或重建任何艺术参数。
+      float effectiveChromaticAberration =
+          uChromaticAberration * uRefractionEnabled;
+      if (effectiveChromaticAberration < 0.001) {
         // No chromatic aberration — single bilinear fetch.
         bgRgb = texture(uBackground, refractedUV).rgb;
       } else {
@@ -566,7 +577,7 @@ void main() {
         // so dispersion is concentrated at the SDF boundary (the curved glass rim)
         // and zero in the flat interior — matching the prismatic fringe visible on
         // real glass edges and iOS 26 pills.
-        float abScale = uChromaticAberration * edgeInfluence * 0.006;
+        float abScale = effectiveChromaticAberration * edgeInfluence * 0.006;
         vec2 abShift = surfaceNormal * abScale;
         float bgR = texture(uBackground, refractedUV + abShift).r;
         float bgG = texture(uBackground, refractedUV).g;

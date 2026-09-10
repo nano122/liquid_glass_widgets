@@ -90,6 +90,19 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets('关闭折射状态穿过 indicator 默认配方合并', (tester) async {
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.5,
+        settings: const LiquidGlassSettings(refractionEnabled: false),
+      )));
+      await tester.pump();
+
+      // 中文注释：AnimatedGlassIndicator 会逐字段合并 iOS 26 指示器配方；
+      // 直接检查最终 GlassEffect，锁定最容易在交互组件中丢失开关的真实路径。
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.refractionEnabled, isFalse);
+    });
+
     testWidgets('multiple non-default fields exercise several branches',
         (tester) async {
       await tester.pumpWidget(_wrap(_make(
