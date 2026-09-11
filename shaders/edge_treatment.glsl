@@ -259,15 +259,21 @@ float getInnerHighlightGate(
     return insetGate + rimStyleInput;
 }
 
-// 中文说明：上下高光是容器内部的面积反射，不是另一条细描边。小尺寸玻璃按
-// 自身高度保留顶部 15%、底部 30% 的视觉比例；大尺寸则分别限制在 10 / 20
-// logical px（Flutter 中等价于 dp），避免高光随容器无限变宽。峰值平台恢复最初
-// 约 3% / 4% 的可见范围，并分别封顶在 2 / 3 logical px；平台内部保持完整峰值，
-// 离开平台后再用 smoothstep 回落到零，不再从几何端点直接开始衰减。峰值不再
-// 混向固定白点，而是由背景色逐通道加权剩余亮度空间；背景整体亮度还会经过
-// 两端强、中间弱的 U 型门控：暗背景恢复材质反射，中间亮度避免过曝，接近白色
-// 时重新增强以维持可见高光。参数集中在共享 include 中，保证 Premium、Standard
-// 与交互指示器一致。
+// 中文说明：上下高光是容器内部的面积反射，不是另一条细描边。
+// 大尺寸（高度超过 67dp，如长条胶囊底栏、搜索框、卡片）按原有设计分别限制在
+// 顶部 10 / 底部 20 logical px（Flutter 中等价于 dp），且占比基准为顶部 15% / 底部 30%，
+// 峰值平台分别封顶在 2 / 3 logical px（基准 3% / 4%）。
+// 当容器高度降至小尺寸范围（24~48dp，如圆球、圆形进度指示器、按钮徽标）时，
+// 由于曲面极点处水平弦长急剧收缩，微小圆冠面积相较长条大容器剧降数十倍，容易被边缘描边吞没。
+// 为此引入连续小尺寸自适应因子（smallFactor，在 24dp~67dp 平滑过渡）：
+// 1. 顶部高光覆盖比例自适应放宽至 28%（保底约 7.0dp 深度），底部放宽至 36%（保底约 9.0dp 深度）；
+// 2. 顶部峰值平台放宽至 7%（保底约 1.8dp），底部平台放宽至 8%（保底约 2.2dp），
+//    确保圆球顶部的有效满曝光带不被 0.36dp 结构描边挤占；
+// 3. 离开平台后的衰减曲率在小尺寸下平缓软化（幂次由 1.0 平滑过渡至 0.75），
+//    模拟真实球面的漫射晕染，避免高光退化为狭窄断层；
+// 4. 大尺寸小尺寸因子为 0.0，完全维持原有 10dp/20dp 封顶与 15%/30% 比例不变。
+// 提亮不再混向固定白点，而是由背景色逐通道加权剩余亮度空间，并经过 Rec.709 U 型门控。
+// 参数集中在共享 include 中，保证 Premium、Standard 与交互指示器一致。
 const float kTopAreaHighlightExtent = 0.15;
 const float kBottomAreaHighlightExtent = 0.30;
 const float kTopAreaHighlightPlateau = 0.03;
@@ -276,6 +282,16 @@ const float kTopAreaHighlightMaxLogicalHeight = 10.0;
 const float kBottomAreaHighlightMaxLogicalHeight = 20.0;
 const float kTopAreaHighlightPlateauMaxLogicalHeight = 2.0;
 const float kBottomAreaHighlightPlateauMaxLogicalHeight = 3.0;
+
+// 中文说明：小尺寸容器（如 24~48dp 圆球）的自适应基准参数
+const float kSmallGlassTransitionStart = 67.0;
+const float kSmallGlassTransitionEnd = 24.0;
+const float kTopAreaHighlightSmallExtent = 0.28;
+const float kBottomAreaHighlightSmallExtent = 0.36;
+const float kTopAreaHighlightSmallPlateau = 0.07;
+const float kBottomAreaHighlightSmallPlateau = 0.08;
+const float kAreaHighlightSmallFalloffPower = 0.75;
+
 const float kAreaHighlightMiddleBackdropGate = 0.25;
 const float kAreaHighlightDarkPeakGate = 0.50;
 const float kAreaHighlightDarkFullLuma = 0.30;
@@ -291,41 +307,72 @@ float getVerticalAreaHighlightExposureLift(
     float verticalPosition = clamp(normalizedVerticalPosition, 0.0, 1.0);
     float safeGlassLogicalHeight = max(glassLogicalHeight, 0.0001);
 
-    // 中文说明：把逻辑高度上限除以当前玻璃高度即可换回归一化比例，再与原始
-    // 比例取较小值。高度不超过约 67dp 时仍是顶部 15% / 底部 30%；超过后
-    // 实际高光不再超过 10dp / 20dp。峰值平台另行恢复为 2dp / 3dp 上限，
-    // 让外观回到最初版本，同时避免大面积区域随容器继续放大。
-    float effectiveTopExtent = min(
+    // 中文说明：计算小尺寸平滑过渡因子。高度在 67dp 以上为 0.0（纯大尺寸/长条容器），
+    // 在 24dp 以下饱和为 1.0（纯小尺寸/圆球）；中间使用 smoothstep 连续过渡，无视觉跳变。
+    float smallFactor = 1.0 - smoothstep(
+        kSmallGlassTransitionEnd,
+        kSmallGlassTransitionStart,
+        safeGlassLogicalHeight
+    );
+
+    // 中文说明：小尺寸下自适应放宽比例上限并提供物理逻辑深度保底；
+    // 大尺寸则严格限制在 10dp / 20dp（平台 2dp / 3dp）与 15% / 30% 比例。
+    float baseTopExtent = mix(
         kTopAreaHighlightExtent,
+        kTopAreaHighlightSmallExtent,
+        smallFactor
+    );
+    float baseBottomExtent = mix(
+        kBottomAreaHighlightExtent,
+        kBottomAreaHighlightSmallExtent,
+        smallFactor
+    );
+    float baseTopPlateau = mix(
+        kTopAreaHighlightPlateau,
+        kTopAreaHighlightSmallPlateau,
+        smallFactor
+    );
+    float baseBottomPlateau = mix(
+        kBottomAreaHighlightPlateau,
+        kBottomAreaHighlightSmallPlateau,
+        smallFactor
+    );
+
+    float effectiveTopExtent = min(
+        baseTopExtent,
         kTopAreaHighlightMaxLogicalHeight / safeGlassLogicalHeight
     );
     float effectiveBottomExtent = min(
-        kBottomAreaHighlightExtent,
+        baseBottomExtent,
         kBottomAreaHighlightMaxLogicalHeight / safeGlassLogicalHeight
     );
     float effectiveTopPlateau = min(
-        kTopAreaHighlightPlateau,
+        baseTopPlateau,
         kTopAreaHighlightPlateauMaxLogicalHeight / safeGlassLogicalHeight
     );
     float effectiveBottomPlateau = min(
-        kBottomAreaHighlightPlateau,
+        baseBottomPlateau,
         kBottomAreaHighlightPlateauMaxLogicalHeight / safeGlassLogicalHeight
     );
 
-    // 中文说明：smoothstep 的起点就是旧版峰值平台边界，所以顶部 y=0 到
-    // 峰值平台末端保持 1.0，之后在 y=0.15 前回落为零；底部同理在最后
-    // 2 / 3dp 平台保持 1.0，再向 y=0.70 的区域起点反向回落。中部不补白，
-    // 避免高光退化成覆盖整块玻璃的均匀雾层。
-    float topHighlight = 1.0 - smoothstep(
+    // 中文说明：smoothstep 从峰值平台边界平滑过渡到区域外边缘；
+    // 离开平台后的衰减曲率在小尺寸下通过 falloffPower 平滑软化至 0.75，
+    // 呈现球面漫射过渡；大尺寸 falloffPower 为 1.0，完全等价于标准 smoothstep。
+    float topFalloff = 1.0 - smoothstep(
         effectiveTopPlateau,
         effectiveTopExtent,
         verticalPosition
     );
-    float bottomHighlight = smoothstep(
+    float bottomFalloff = smoothstep(
         1.0 - effectiveBottomExtent,
         1.0 - effectiveBottomPlateau,
         verticalPosition
     );
+
+    float falloffPower = mix(1.0, kAreaHighlightSmallFalloffPower, smallFactor);
+    float topHighlight = pow(max(topFalloff, 0.0), falloffPower);
+    float bottomHighlight = pow(max(bottomFalloff, 0.0), falloffPower);
+
     return clamp(
         topHighlight + bottomHighlight,
         0.0,
