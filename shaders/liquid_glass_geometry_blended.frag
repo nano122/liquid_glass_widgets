@@ -37,6 +37,7 @@ layout(location = 3) uniform float uShapeData[MAX_SHAPES * 7];
 
 // sdf.glsl functions access uShapeData as a global (no array-by-value parameters,
 // which are rejected by glslang on Windows/Vulkan SPIR-V compilation).
+// 中文说明：超椭圆原语已与最终解析 Shader 共用 superellipse_sdf.glsl。
 #include "sdf.glsl"
 #include "displacement_encoding.glsl"
 

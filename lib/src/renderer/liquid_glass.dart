@@ -43,6 +43,7 @@ class LiquidGlass extends StatelessWidget {
         shadows = const <BoxShadow>[],
         ownLayerConfig = null,
         _captureImage = null,
+        _backgroundSnapshot = null,
         _captureOriginInScreenSpace = Offset.zero;
 
   /// Creates a new [LiquidGlass] that is part of a [LiquidGlassBlendGroup].
@@ -62,6 +63,7 @@ class LiquidGlass extends StatelessWidget {
         preferAnalyticRoundedRectangle = false,
         shadows = const <BoxShadow>[],
         _captureImage = null,
+        _backgroundSnapshot = null,
         _captureOriginInScreenSpace = Offset.zero,
         grouped = true;
 
@@ -84,10 +86,12 @@ class LiquidGlass extends StatelessWidget {
     this.clipExpansion = EdgeInsets.zero,
     this.preferAnalyticRoundedRectangle = false,
     ui.Image? captureImage,
+    GlassSnapshot? backgroundSnapshot,
     Offset captureOriginInScreenSpace = Offset.zero,
   })  : ownLayerConfig = settings,
         _captureImage = captureImage,
         _captureOriginInScreenSpace = captureOriginInScreenSpace,
+        _backgroundSnapshot = backgroundSnapshot,
         grouped = false;
 
   /// The child of this widget.
@@ -134,10 +138,10 @@ class LiquidGlass extends StatelessWidget {
   /// the grouped or default constructors.
   final EdgeInsets clipExpansion;
 
-  /// 是否允许独立层为单个 [LiquidRoundedRectangle] 使用解析式几何。
+  /// 是否允许独立层为单个圆角矩形或超椭圆使用解析式几何。
   ///
   /// 中文说明：启用后仍由 [LiquidGlassLayer] 的官方 BackdropFilter 合成链读取
-  /// 实时背景，只跳过中间 geometry texture；若形状、变换或捕获模式不满足条件，
+  /// 实时背景，也支持宿主快照直接采样；若形状或变换不满足条件，
   /// 渲染器会自动留在原有纹理几何路径，不近似其他轮廓。
   final bool preferAnalyticRoundedRectangle;
 
@@ -145,6 +149,8 @@ class LiquidGlass extends StatelessWidget {
   // When non-null, LiquidGlassLayer bypasses its BackdropFilterLayer and
   // feeds this image directly to the shader as uBackgroundTexture.
   final ui.Image? _captureImage;
+  // 中文说明：宿主快照的模态遮罩与纹理分开传递，避免路由动画生成新图片。
+  final GlassSnapshot? _backgroundSnapshot;
   final Offset _captureOriginInScreenSpace;
 
   @override
@@ -156,8 +162,10 @@ class LiquidGlass extends StatelessWidget {
         shadows: shadows,
         clipExpansion: clipExpansion,
         preferAnalyticRoundedRectangle: preferAnalyticRoundedRectangle,
-        captureImage: _captureImage,
-        captureOriginInScreenSpace: _captureOriginInScreenSpace,
+        captureImage: _backgroundSnapshot?.image ?? _captureImage,
+        captureOverlayOpacity: _backgroundSnapshot?.overlayOpacity ?? 0,
+        captureOriginInScreenSpace:
+            _backgroundSnapshot?.origin ?? _captureOriginInScreenSpace,
         child: LiquidGlassBlendGroup(
           blend: 0,
           child: Builder(

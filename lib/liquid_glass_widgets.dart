@@ -11,6 +11,7 @@ export 'src/renderer/liquid_glass_renderer.dart'
         LiquidGlassSettings,
         PlatformViewGlassMode,
         LiquidGlassLayer,
+        GlassSnapshot,
         LiquidGlassBlendGroup,
         GlassGlow,
         debugPaintLiquidGlassGeometry;

@@ -38,6 +38,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
+#include "superellipse_sdf.glsl"
 
 // Slot 0-1:  uSize           — physical-pixel size of the backdrop capture
 // Slots 2-3: uGeometryOffset — top-left of geometry matte in physical pixels
@@ -124,6 +125,9 @@ uniform float uRefractionEnabled;
 // 其余区域保留材质合成但改走原坐标单样本路径，降低大面积玻璃的采样成本。
 uniform float uTopRefractionOnly;
 
+// 中文说明：仅显式快照启用硬件双线性和黑色模态遮罩；实时 backdrop 每帧写零。
+uniform vec2 uCaptureConfig; // x: capture enabled, y: barrier opacity
+
 // uThickness directly and is already DPR-independent).
 // uniform float uRefractScale; // Removed in favor of scaling uThickness
 
@@ -158,6 +162,18 @@ layout(location = 0) out vec4 fragColor;
 // SPIR-V path; floor(), fract(), and vec2 arithmetic are all universally
 // supported. This function introduces no new platform compatibility issues.
 vec4 textureBilinear(vec2 uv, vec2 size, vec2 invSize) {
+    // 中文说明：显式 Image sampler 可指定 linear，四次手工邻点插值可精确
+    // 替换成一次硬件插值；原生 backdrop 的 nearest sampler 仍保留旧算法。
+    if (uCaptureConfig.x > 0.5) {
+        vec4 captured = texture(uBackgroundTexture, uv);
+        captured.rgb *= 1.0 - uCaptureConfig.y;
+        captured.a += (1.0 - captured.a) * uCaptureConfig.y;
+        if (uBackgroundFallback.a > 0.0) {
+            captured.rgb += uBackgroundFallback.rgb * uBackgroundFallback.a * (1.0 - captured.a);
+            captured.a += uBackgroundFallback.a * (1.0 - captured.a);
+        }
+        return captured;
+    }
     vec2 px = uv * size - 0.5;
     vec2 f = fract(px);
     vec2 p0 = floor(px);
@@ -191,7 +207,33 @@ vec4 textureBilinear(vec2 uv, vec2 size, vec2 invSize) {
     return bg;
 }
 
-vec3 analyticRoundedRectSdfAt(vec2 localPoint) {
+vec4 analyticRoundedRectSdfAt(vec2 localPoint) {
+    // 中文说明：mode 2 保留抽屉原有上下独立超椭圆。中央直边区距离和
+    // 法线可直接求出，避开对整个大面板执行五次 Lamé 幂函数。
+    if (uAnalyticRect.w > 1.5) {
+        vec2 halfSize = uAnalyticRect.xy * 0.5;
+        vec2 p = localPoint - halfSize;
+        float top = uAnalyticRect.z;
+        float bottom = uAnalyticInverseY.w;
+        float maxZone = min(max(top, bottom) * 1.528, min(halfSize.x, halfSize.y));
+        vec2 straight = abs(p) - halfSize;
+        // 差分采样宽度与旧 geometry shader 一致：1/3 logical px。
+        // 任一轴离开所有圆角区时，两个上下 SDF 都退化为同一直边距离。
+        if (abs(p.x) < halfSize.x - maxZone - 1.0 ||
+            abs(p.y) < halfSize.y - maxZone - 1.0) {
+            vec2 n = straight.x > straight.y ? vec2(sign(p.x), 0.0) : vec2(0.0, sign(p.y));
+            return vec4(max(straight.x, straight.y), n, 1.0);
+        }
+        float stepSize = 1.0 / 3.0;
+        float sd = sdfSquircleAsym(p, halfSize, top, bottom);
+        vec2 gradient = vec2(
+            sdfSquircleAsym(p + vec2(stepSize, 0.0), halfSize, top, bottom) - sdfSquircleAsym(p - vec2(stepSize, 0.0), halfSize, top, bottom),
+            sdfSquircleAsym(p + vec2(0.0, stepSize), halfSize, top, bottom) - sdfSquircleAsym(p - vec2(0.0, stepSize), halfSize, top, bottom)
+        ) / (2.0 * stepSize);
+        float magnitude = length(gradient);
+        return vec4(magnitude > 0.1 ? sd / magnitude : sd,
+            magnitude > 0.1 ? gradient / magnitude : gradient, magnitude);
+    }
     vec2 size = max(uAnalyticRect.xy, vec2(0.001));
     vec2 halfSize = size * 0.5;
     float radius = min(uAnalyticRect.z, min(halfSize.x, halfSize.y));
@@ -212,11 +254,11 @@ vec3 analyticRoundedRectSdfAt(vec2 localPoint) {
         gradient = vec2(0.0, sign(centered.y));
     }
 
-    return vec3(sdLogical, gradient);
+    return vec4(sdLogical, gradient, 1.0);
 }
 
 vec4 analyticRoundedRectGeometry(vec2 localPoint, float thickness) {
-    vec3 sdfData = analyticRoundedRectSdfAt(localPoint);
+    vec4 sdfData = analyticRoundedRectSdfAt(localPoint);
     float sdLogical = sdfData.x;
     vec2 gradient = sdfData.yz;
 
@@ -244,7 +286,9 @@ vec4 analyticRoundedRectGeometry(vec2 localPoint, float thickness) {
     float dpr = max(1.0, uEdgeConfig.z * 3.0);
     float sdPhysical = min(sdLogical, 0.0) * dpr;
     float nCos = clamp((thickness + sdPhysical) / thickness, 0.0, 1.0);
-    vec2 normalXY = gradient * nCos;
+    // 中文说明：保留旧纹理路径的伪 SDF 梯度幅值对曲面法线的影响。
+    vec2 normalXY = normalize(vec3(gradient * sdfData.w * nCos,
+        sqrt(max(0.0, 1.0 - nCos * nCos)))).xy;
     float x = thickness + sdPhysical;
     float sqrtTerm = sqrt(max(0.0, thickness * thickness - x * x));
     float height = mix(sqrtTerm, thickness, float(sdPhysical < -thickness));
@@ -314,7 +358,7 @@ vec3 sampleAnalyticEdgeAtOffset(
     vec2 sampleLocal = geometryLocalPointFromFragment(
         fragCoord + pixelOffset
     );
-    vec3 sampleSdf = analyticRoundedRectSdfAt(sampleLocal);
+    vec4 sampleSdf = analyticRoundedRectSdfAt(sampleLocal);
     vec2 sampleNormal = sampleSdf.yz;
     vec2 sampleScreenGradient = vec2(
         sampleNormal.x * uAnalyticInverseX.x

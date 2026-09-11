@@ -62,7 +62,7 @@ class _ScaleSafeRepaintBoundary extends SingleChildRenderObjectWidget {
 
 class _RenderScaleSafeRepaintBoundary extends RenderProxyBox {
   _RenderScaleSafeRepaintBoundary({required EdgeInsets expansion})
-    : _expansion = expansion;
+      : _expansion = expansion;
 
   EdgeInsets _expansion;
   set expansion(EdgeInsets value) {
@@ -82,11 +82,11 @@ class _RenderScaleSafeRepaintBoundary extends RenderProxyBox {
   /// triggering a hard clip at the original layout boundary.
   @override
   Rect get paintBounds => Rect.fromLTRB(
-    -_expansion.left,
-    -_expansion.top,
-    size.width + _expansion.right,
-    size.height + _expansion.bottom,
-  );
+        -_expansion.left,
+        -_expansion.top,
+        size.width + _expansion.right,
+        size.height + _expansion.bottom,
+      );
 }
 
 /// Represents a layer of multiple [LiquidGlass] shapes or
@@ -151,6 +151,7 @@ class LiquidGlassLayer extends StatefulWidget {
     this.clipExpansion = EdgeInsets.zero,
     this.preferAnalyticRoundedRectangle = false,
     this.captureImage,
+    this.captureOverlayOpacity = 0,
     this.captureOriginInScreenSpace = Offset.zero,
     super.key,
   });
@@ -182,7 +183,7 @@ class LiquidGlassLayer extends StatefulWidget {
   /// 是否优先为单个圆角矩形启用最终渲染 Shader 内的解析式 SDF。
   ///
   /// 中文说明：这个开关不创建新的合成层；它只允许 [RenderLiquidGlassLayer]
-  /// 在确认当前层恰好包含一个 [LiquidRoundedRectangle] 时跳过 geometry texture。
+  /// 在确认当前层恰好包含一个圆角矩形或超椭圆时跳过 geometry texture。
   /// 不满足条件时无条件回退官方纹理几何路径。
   final bool preferAnalyticRoundedRectangle;
 
@@ -197,6 +198,9 @@ class LiquidGlassLayer extends StatefulWidget {
   ///
   /// Defaults to null — falls through to the BackdropFilterLayer path.
   final ui.Image? captureImage;
+
+  /// 中文说明：显式快照采样后叠加的黑色模态遮罩透明度。
+  final double captureOverlayOpacity;
 
   /// The global (screen-space) logical-pixel origin of the [RepaintBoundary]
   /// that produced [captureImage]. Used to compute `uCaptureOffset` inside
@@ -259,6 +263,7 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
                 preferAnalyticRoundedRectangle:
                     widget.preferAnalyticRoundedRectangle,
                 captureImage: widget.captureImage,
+                captureOverlayOpacity: widget.captureOverlayOpacity,
                 captureOriginInScreenSpace: widget.captureOriginInScreenSpace,
                 selfScaled: LiquidGlassSelfScaleScope.of(context),
                 child: child!,
@@ -283,6 +288,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
     this.clipExpansion = EdgeInsets.zero,
     this.preferAnalyticRoundedRectangle = false,
     this.captureImage,
+    this.captureOverlayOpacity = 0,
     this.captureOriginInScreenSpace = Offset.zero,
     this.selfScaled = false,
   });
@@ -295,6 +301,9 @@ class _RawShapes extends SingleChildRenderObjectWidget {
   final EdgeInsets clipExpansion;
   final bool preferAnalyticRoundedRectangle;
   final ui.Image? captureImage;
+
+  /// 中文说明：显式快照采样后叠加的黑色模态遮罩透明度。
+  final double captureOverlayOpacity;
   final Offset captureOriginInScreenSpace;
 
   /// See [LiquidGlassSelfScaleScope].
@@ -312,6 +321,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       clipExpansion: clipExpansion,
       preferAnalyticRoundedRectangle: preferAnalyticRoundedRectangle,
       captureImage: captureImage,
+      captureOverlayOpacity: captureOverlayOpacity,
       captureOriginInScreenSpace: captureOriginInScreenSpace,
       selfScaled: selfScaled,
     );
@@ -331,6 +341,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       ..clipExpansion = clipExpansion
       ..preferAnalyticRoundedRectangle = preferAnalyticRoundedRectangle
       ..captureImage = captureImage
+      ..captureOverlayOpacity = captureOverlayOpacity
       ..captureOriginInScreenSpace = captureOriginInScreenSpace
       ..selfScaled = selfScaled;
   }
@@ -346,12 +357,13 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     required super.link,
     super.backdropKey,
     super.captureImage,
+    super.captureOverlayOpacity,
     super.captureOriginInScreenSpace,
     EdgeInsets clipExpansion = EdgeInsets.zero,
     super.preferAnalyticRoundedRectangle,
     bool selfScaled = false,
-  }) : _clipExpansion = clipExpansion,
-       _selfScaled = selfScaled;
+  })  : _clipExpansion = clipExpansion,
+        _selfScaled = selfScaled;
 
   // ── Cached blur filter ──────────────────────────────────────────────────
   // The BackdropFilterLayer's blur filter is rebuilt only when blurSigma
@@ -384,10 +396,10 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
 
   @override
   Size get desiredMatteSize => switch (owner?.rootNode) {
-    final RenderView rv => rv.size,
-    final RenderBox rb => rb.size,
-    _ => Size.zero,
-  };
+        final RenderView rv => rv.size,
+        final RenderBox rb => rb.size,
+        _ => Size.zero,
+      };
 
   Matrix4? _unscaledTransform;
   Offset? _unscaledCaptureOrigin;

@@ -103,10 +103,12 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
     ui.Image? captureImage,
     Offset captureOriginInScreenSpace = Offset.zero,
     bool preferAnalyticRoundedRectangle = false,
+    double captureOverlayOpacity = 0,
   })  : _settings = settings,
         _devicePixelRatio = devicePixelRatio,
         _backdropKey = backdropKey,
         _captureImage = captureImage,
+        _captureOverlayOpacity = captureOverlayOpacity,
         _captureOriginInScreenSpace = captureOriginInScreenSpace,
         _preferAnalyticRoundedRectangle = preferAnalyticRoundedRectangle,
         _link = link,
@@ -197,6 +199,16 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
   set captureImage(ui.Image? value) {
     if (identical(_captureImage, value)) return;
     _captureImage = value;
+    markNeedsPaint();
+  }
+
+  /// 中文说明：快照不包含 ModalBarrier；在采样后叠加同一黑色遮罩，
+  /// 无需为路由动画的每一帧再生成一张变暗快照。
+  double _captureOverlayOpacity;
+  double get captureOverlayOpacity => _captureOverlayOpacity;
+  set captureOverlayOpacity(double value) {
+    if (_captureOverlayOpacity == value) return;
+    _captureOverlayOpacity = value;
     markNeedsPaint();
   }
 
@@ -364,7 +376,7 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
     }
 
     // 中文说明：解析式资格在官方层已经收集完 shape 与 transform 后判断，绝不
-    // 根据调用方声明盲目启用。捕获纹理、复杂轮廓、多形状或不可逆变换都会返回
+    // 根据调用方声明盲目启用。复杂轮廓、多形状或不可逆变换都会返回
     // null，并继续执行原来的 geometry texture 路径。
     _activeAnalyticGeometry = _resolveAnalyticRoundedRectangle();
 
@@ -525,6 +537,10 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
           ..setFloatUniforms(initialIndex: 46, (value) {
             value.setFloat(settings.topRefractionOnly ? 1.0 : 0.0);
           })
+          // 中文说明：实时 backdrop 仍是 nearest sampler，不能启用捕获专用插值。
+          ..setFloatUniforms(initialIndex: 47, (value) {
+            value.setFloats([0.0, 0.0]);
+          })
           ..setImageSampler(
             1,
             geometryImage,
@@ -539,7 +555,6 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
 
   _AnalyticRoundedRectangleGeometry? _resolveAnalyticRoundedRectangle() {
     if (!preferAnalyticRoundedRectangle ||
-        captureImage != null ||
         debugPaintLiquidGlassGeometry ||
         _shapesWithGeometry.length != 1) {
       return null;
@@ -550,8 +565,26 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
 
     final shapeGeometry = geometryCache.shapes.single;
     final shape = shapeGeometry.shape;
-    if (shape is! LiquidRoundedRectangle) return null;
-    final roundedRect = shape;
+    // 中文说明：只扩展已共享同一 SDF 的单个超椭圆；多形状融合仍走纹理。
+    final (radius, bottomRadius, mode) = switch (shape) {
+      LiquidRoundedRectangle(:final borderRadius) => (
+          borderRadius,
+          borderRadius,
+          1.0
+        ),
+      LiquidRoundedSuperellipse(:final borderRadius) => (
+          borderRadius,
+          borderRadius,
+          2.0
+        ),
+      LiquidVerticalRoundedSuperellipse(
+        :final topRadius,
+        :final bottomRadius
+      ) =>
+        (topRadius, bottomRadius, 2.0),
+      _ => (0.0, 0.0, 0.0),
+    };
+    if (mode == 0) return null;
 
     final shapeRenderObject = shapeGeometry.renderObject;
     if (!shapeRenderObject.attached ||
@@ -592,7 +625,9 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
 
     return _AnalyticRoundedRectangleGeometry(
       size: shapeRenderObject.size,
-      cornerRadius: roundedRect.borderRadius,
+      cornerRadius: radius,
+      bottomRadius: bottomRadius,
+      mode: mode,
       screenToShape: screenToShape,
     );
   }
@@ -664,7 +699,7 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
   ///   logical-pixel origin of the capture boundary (from localToGlobal).
   ///   The physical-pixel offset between the two coordinate origins is:
   ///
-  ///     uCaptureOffset = (captureOriginGlobal - thisRenderOriginGlobal) * dpr
+  ///     uCaptureOffset = (thisRenderOriginGlobal - captureOriginGlobal) * dpr
   ///
   ///   Adding this to [FlutterFragCoord()] maps each fragment into capture-image
   ///   space, so [screenUV] correctly addresses the pre-captured bar texture.
@@ -689,7 +724,7 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
     // is relative to the compositing layer, i.e. our RepaintBoundary surface)
     // into the capture image's coordinate space.
     final captureOffset =
-        (captureOriginInScreenSpace - thisOriginLogical) * dpr;
+        (thisOriginLogical - captureOriginInScreenSpace) * dpr;
 
     // uSize: physical pixel dimensions of the captured image.
     final captureSize = ui.Size(
@@ -697,18 +732,6 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
       capture.height.toDouble(),
     );
 
-    // Geometry bounds in screen space, snapped to pixels.
-    final activeBounds = MatrixUtils.transformRect(
-      matteTransform,
-      _geometryLocalBounds,
-    ).snapToPixels(dpr);
-
-    // uGeometryOffset/uGeometrySize are relative to the capture origin
-    // (not screen origin) so that geometryUV = (fragCoord + uCaptureOffset -
-    // uGeometryOffset) / uGeometrySize resolves correctly.
-    final geometryOffsetInCapture =
-        (activeBounds.topLeft - captureOriginInScreenSpace) * dpr;
-    final geometrySizePhysical = activeBounds.size * dpr;
     final scale = dpr / 3.0;
 
     renderShader
@@ -718,9 +741,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
       })
       // Slots 2-5: uGeometryOffset + uGeometrySize, relative to capture origin.
       ..setFloatUniforms(initialIndex: 2, (value) {
+        // 中文说明：捕获 Canvas 已统一到 layer 本地物理像素，几何纹理
+        // 使用本地逻辑边界和逆 DPR 映射，不再混入截图的全局原点。
         value
-          ..setOffset(geometryOffsetInCapture)
-          ..setSize(geometrySizePhysical);
+          ..setOffset(_geometryLocalBounds.topLeft)
+          ..setSize(_geometryLocalBounds.size);
       })
       ..setFloatUniforms(initialIndex: 6, (value) {
         value
@@ -761,11 +786,15 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
           settings.effectiveEdgeAbsorption,
         ]);
       })
-      // Slots 32-43：捕获模式始终使用 geometry texture。即使同一个 Shader
-      // 上一帧刚渲染过解析式圆角，也必须清零 enabled 和逆变换，避免残留状态
-      // 让捕获纹理被错误地当作解析几何处理。
+      // 中文说明：捕获路径也支持解析几何，逆矩阵从当前 Canvas 本地开始。
+      // 多形状继续读取原几何纹理；每次覆盖模式和矩阵，避免 Shader 残留状态。
       ..setFloatUniforms(initialIndex: 32, (value) {
-        value.setFloats(_disabledAnalyticUniforms);
+        value.setFloats(_activeAnalyticGeometry?.uniformValues(dpr,
+                localToScreen: matteTransform) ??
+            _textureGeometryUniformValues(
+                layerToScreen: Matrix4.identity(),
+                geometryLocalBounds: _geometryLocalBounds,
+                devicePixelRatio: dpr)!);
       })
       // Slot 44：捕获路径同样必须显式同步 PlatformView 模式，避免复用的
       // FragmentShader 残留上一条绘制命令的透传状态。
@@ -787,8 +816,18 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
         value.setFloat(settings.topRefractionOnly ? 1.0 : 0.0);
       })
       // Slot 0: captured background image (replaces the BackdropFilter read).
-      ..setImageSampler(0, capture)
-      ..setImageSampler(1, geometryImage!, filterQuality: FilterQuality.medium);
+      // 中文说明：显式 sampler 可用硬件双线性，一次读取替代四次手工读取。
+      // 遮罩使用与当前 ModalBarrier 相同的动画值，快照本身保持不变。
+      ..setFloatUniforms(initialIndex: 47, (value) {
+        value.setFloats([1.0, captureOverlayOpacity]);
+      })
+      ..setImageSampler(0, capture, filterQuality: FilterQuality.low)
+      ..setImageSampler(
+          1,
+          _activeAnalyticGeometry != null
+              ? _analyticSamplerImage
+              : geometryImage!,
+          filterQuality: FilterQuality.medium);
 
     // Draw the capture path: no BackdropFilterLayer needed — draw directly
     // onto the canvas over the expanded clip rect.
@@ -811,8 +850,16 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
     // No BackdropFilter wrapper; the captured image is already bound to slot 0.
     context.canvas
       ..save()
-      ..clipRect(clipRect.shift(offset))
-      ..drawRect(clipRect.shift(offset), Paint()..shader = renderShader)
+      // 中文说明：FragmentShader 的 Canvas 坐标是逻辑像素，backdrop 是物理
+      // 像素。显式缩放让两种入口共享原有光学厚度与抗锯齿，不随 DPR 变形。
+      ..translate(offset.dx, offset.dy)
+      ..scale(1 / dpr)
+      ..clipRect(Rect.fromLTRB(clipRect.left * dpr, clipRect.top * dpr,
+          clipRect.right * dpr, clipRect.bottom * dpr))
+      ..drawRect(
+          Rect.fromLTRB(clipRect.left * dpr, clipRect.top * dpr,
+              clipRect.right * dpr, clipRect.bottom * dpr),
+          Paint()..shader = renderShader)
       ..restore();
 
     // Pass 3: shape contents painted on top (non-glass child layer).
@@ -977,19 +1024,28 @@ class _AnalyticRoundedRectangleGeometry {
     required this.size,
     required this.cornerRadius,
     required this.screenToShape,
+    required this.bottomRadius,
+    required this.mode,
   });
 
   final Size size;
   final double cornerRadius;
+  final double bottomRadius;
+  final double mode;
   final Matrix4 screenToShape;
 
-  List<double> uniformValues(double devicePixelRatio) {
-    final inverse = screenToShape.storage;
+  List<double> uniformValues(double devicePixelRatio,
+      {Matrix4? localToScreen}) {
+    // 中文说明：backdrop 片元在根视图；直接 Canvas 绘制的片元在玻璃层本地。
+    // 两种入口共用 shape 逆矩阵，但捕获入口必须先乘回 layer→screen。
+    final matrix = Matrix4.copy(screenToShape);
+    if (localToScreen != null) matrix.multiply(localToScreen);
+    final inverse = matrix.storage;
     return <double>[
       size.width,
       size.height,
       cornerRadius,
-      1.0,
+      mode,
       inverse[0] / devicePixelRatio,
       inverse[4] / devicePixelRatio,
       inverse[12],
@@ -997,7 +1053,7 @@ class _AnalyticRoundedRectangleGeometry {
       inverse[1] / devicePixelRatio,
       inverse[5] / devicePixelRatio,
       inverse[13],
-      0.0,
+      bottomRadius,
     ];
   }
 }

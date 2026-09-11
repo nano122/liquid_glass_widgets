@@ -50,6 +50,8 @@ class AdaptiveGlass extends StatelessWidget {
     this.glowIntensity = 0.0,
     this.isInteractive = false,
     this.platformViewBackdrop = false,
+    this.backgroundSnapshot,
+    this.preferAnalyticGeometry = false,
     this.clipExpansion = EdgeInsets.zero,
     super.key,
   });
@@ -184,6 +186,12 @@ class AdaptiveGlass extends StatelessWidget {
       child: child,
     );
   }
+
+  /// 中文说明：由宿主提供的静态背景；仅在原生独立层使用，其他平台保持原渲染分支。
+  final GlassSnapshot? backgroundSnapshot;
+
+  /// 中文说明：允许单个受支持轮廓直接求 SDF，避免尺寸动画反复栅格化整面几何。
+  final bool preferAnalyticGeometry;
 
   @override
   Widget build(BuildContext context) {
@@ -469,6 +477,9 @@ class AdaptiveGlass extends StatelessWidget {
         shadows: shadows,
         clipBehavior: clipBehavior,
         clipExpansion: clipExpansion,
+        // 中文说明：复用宿主快照不改变质量选择、材质参数和内部内容分层。
+        backgroundSnapshot: backgroundSnapshot,
+        preferAnalyticRoundedRectangle: preferAnalyticGeometry,
         // De-isolate children so nested glass groups with this own-layer
         // rather than creating its own (which causes double-glass).
         // Carry the parent's defaultQuality through so quality hints

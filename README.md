@@ -1084,3 +1084,17 @@ MIT — see the [LICENSE](LICENSE) file for details.
 - [pub.dev](https://pub.dev/packages/liquid_glass_widgets)
 - [Repository](https://github.com/sdegenaar/liquid_glass_widgets)
 - [Issue Tracker](https://github.com/sdegenaar/liquid_glass_widgets/issues)
+
+
+## 概要任务抽屉渲染优化（2026-09-11）
+
+任务详情抽屉通过 `preferAnalyticGeometry` 为单个上下非对称超椭圆启用最终
+Shader 中的几何计算；与原几何纹理共享 Lamé 距离公式，直边区域直接求距离，
+尺寸变化不再栅格化整面几何纹理。多形状与不支持的变换保留纹理路径。
+
+`GlassSnapshot` 将现有原 DPR 概要快照直接送入 Impeller 独立玻璃层，省去
+抽屉的实时 backdrop 提取，并使用硬件双线性替代每次四点手工插值。
+黑色遮罩按路由原有 barrierCurve 同步，快照在 route.completed 后释放。
+文本、图标、轮廓参数、顶部折射限制与材质高光保留；minimal、壁纸毛玻璃和
+Skia/Web 保持各自原有分流。尚未完成真机优化前后的帧耗时与截图对照，
+不能把减少纹理生成和读取次数直接等同于已测得的帧率提升。

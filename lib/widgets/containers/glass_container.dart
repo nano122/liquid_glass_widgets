@@ -123,6 +123,8 @@ class GlassContainer extends StatelessWidget {
     this.allowElevation = false,
     this.glowIntensity = 0.0,
     this.platformViewBackdrop = false,
+    this.backgroundSnapshot,
+    this.preferAnalyticGeometry = false,
   });
 
   // ===========================================================================
@@ -254,6 +256,12 @@ class GlassContainer extends StatelessWidget {
   /// the underlying [AdaptiveGlass].
   final bool platformViewBackdrop;
 
+  /// 中文说明：由宿主提供的静态背景；仅在原生独立层使用，其他平台保持原渲染分支。
+  final GlassSnapshot? backgroundSnapshot;
+
+  /// 中文说明：允许单个受支持轮廓直接求 SDF，避免尺寸动画反复栅格化整面几何。
+  final bool preferAnalyticGeometry;
+
   @override
   Widget build(BuildContext context) {
     // Inherit quality from parent layer if not explicitly set
@@ -320,6 +328,8 @@ class GlassContainer extends StatelessWidget {
       allowElevation: allowElevation, // Configurable elevation behavior
       glowIntensity: glowIntensity,
       platformViewBackdrop: platformViewBackdrop,
+      backgroundSnapshot: backgroundSnapshot,
+      preferAnalyticGeometry: preferAnalyticGeometry,
       child: InheritedLiquidGlass(
         settings: effectiveSettings,
         quality: effectiveQuality,

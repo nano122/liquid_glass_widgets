@@ -12,6 +12,8 @@
 //   - Added Windows/SkSL shader compatibility layer.
 import 'package:flutter/foundation.dart' show kDebugMode;
 
+// 中文说明：应用抽屉可复用自身持有的背景快照，不创建新的捕获循环。
+export 'glass_snapshot.dart' show GlassSnapshot;
 export 'glass_glow.dart' show GlassGlow, GlassGlowLayer;
 export 'liquid_glass.dart' show LiquidGlass;
 export 'liquid_glass_blend_group.dart' show LiquidGlassBlendGroup;
