@@ -13,6 +13,7 @@ import '../internal/fragment_shader_extensions.dart';
 import '../liquid_glass_renderer.dart';
 import '../internal/render_liquid_glass_geometry.dart';
 import '../internal/snap_rect_to_pixels.dart';
+import '../shaders.dart';
 
 // 中文说明：最终渲染 Shader 的几何坐标 uniform 固定占 12 个 float。捕获
 // 路径无法复用屏幕坐标逆矩阵，因此每帧显式写零，避免同一个 FragmentShader
@@ -565,22 +566,22 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
 
     final shapeGeometry = geometryCache.shapes.single;
     final shape = shapeGeometry.shape;
-    // 中文说明：只扩展已共享同一 SDF 的单个超椭圆；多形状融合仍走纹理。
+    // 中文说明：非 Windows 平台继续为单个超椭圆启用 mode 2；Windows 的
+    // 安全 Shader 从编译产物中完全移除了该分支，因此这里必须回退 geometry
+    // texture，不能只把未被安全 Shader 支持的 mode 继续写入 uniform。
+    final supportsAnalyticSuperellipse =
+        ShaderKeys.supportsAnalyticSuperellipse;
     final (radius, bottomRadius, mode) = switch (shape) {
       LiquidRoundedRectangle(:final borderRadius) => (
           borderRadius,
           borderRadius,
           1.0
         ),
-      LiquidRoundedSuperellipse(:final borderRadius) => (
-          borderRadius,
-          borderRadius,
-          2.0
-        ),
-      LiquidVerticalRoundedSuperellipse(
-        :final topRadius,
-        :final bottomRadius
-      ) =>
+      LiquidRoundedSuperellipse(:final borderRadius)
+          when supportsAnalyticSuperellipse =>
+        (borderRadius, borderRadius, 2.0),
+      LiquidVerticalRoundedSuperellipse(:final topRadius, :final bottomRadius)
+          when supportsAnalyticSuperellipse =>
         (topRadius, bottomRadius, 2.0),
       _ => (0.0, 0.0, 0.0),
     };

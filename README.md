@@ -1088,9 +1088,13 @@ MIT — see the [LICENSE](LICENSE) file for details.
 
 ## 概要任务抽屉渲染优化（2026-09-11）
 
-任务详情抽屉通过 `preferAnalyticGeometry` 为单个上下非对称超椭圆启用最终
-Shader 中的几何计算；与原几何纹理共享 Lamé 距离公式，直边区域直接求距离，
-尺寸变化不再栅格化整面几何纹理。多形状与不支持的变换保留纹理路径。
+任务详情抽屉在非 Windows 平台通过 `preferAnalyticGeometry` 为单个上下非对称
+超椭圆启用最终 Shader 中的几何计算；与原几何纹理共享 Lamé 距离公式，直边
+区域直接求距离，尺寸变化不再栅格化整面几何纹理。Windows 原生
+Impeller/OpenGLESSDF 使用不含超椭圆 mode 2 的独立安全 Shader，并把该形状
+回退到既有 geometry texture；圆角矩形 mode 1 与其余合成效果不变。这样避免
+Flutter 3.47.x 在部分 Windows 图形栈编译该分支后整层空白，同时不牺牲其他
+平台的解析优化。多形状与不支持的变换继续保留纹理路径。
 
 `GlassSnapshot` 将现有原 DPR 概要快照直接送入 Impeller 独立玻璃层，省去
 抽屉的实时 backdrop 提取，并使用硬件双线性替代每次四点手工插值。

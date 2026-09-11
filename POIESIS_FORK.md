@@ -169,8 +169,11 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
   PlatformView 安全路径时仍遵循既有无折射回退，`blur: 0` 本身不代表禁用折射。
   需要保留材质 Shader 但关闭背景折射时使用 `refractionEnabled: false`；需要
   保留顶部折射同时降低大面积采样时使用 `topRefractionOnly: true`。
-- superellipse、椭圆、上下非对称圆角以及多形状 metaball 继续使用官方几何
-  texture 管线，不用近似轮廓换取性能。
+- Windows 原生 Impeller/OpenGLESSDF 为 superellipse 与上下非对称超椭圆使用
+  官方 geometry texture；其最终合成资产不包含解析 mode 2，避免 Flutter
+  3.47.x 在部分 Windows 图形栈编译动态 Lamé 幂函数后整层空白。非 Windows
+  平台在调用方明确设置 `preferAnalyticGeometry` 时仍保留 mode 2；椭圆、
+  多形状 metaball 与其他复杂轮廓继续使用官方 geometry texture。
 - 透视、退化或不可逆变换不会强行进入解析式或二维逆仿射分支，自动回退官方
   纹理几何兼容映射。
 - Skia、Web 和 PlatformView 的既有自适应策略保持不变。
@@ -186,9 +189,13 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
 
 ## 概要任务抽屉渲染优化（2026-09-11）
 
-任务详情抽屉通过 `preferAnalyticGeometry` 为单个上下非对称超椭圆启用最终
-Shader 中的几何计算；与原几何纹理共享 Lamé 距离公式，直边区域直接求距离，
-尺寸变化不再栅格化整面几何纹理。多形状与不支持的变换保留纹理路径。
+任务详情抽屉在非 Windows 平台通过 `preferAnalyticGeometry` 为单个上下非对称
+超椭圆启用最终 Shader 中的几何计算；与原几何纹理共享 Lamé 距离公式，直边
+区域直接求距离，尺寸变化不再栅格化整面几何纹理。Windows 原生在加载
+`FragmentProgram` 前改选 `liquid_glass_final_render_windows.frag`，该编译单元
+保持相同 uniform 契约但完全移除 mode 2，并在 RenderObject 中把超椭圆回退到
+既有 geometry texture。圆角矩形 mode 1、快照直传、遮罩、折射、材质高光与
+其他平台的解析优化均保留；多形状与不支持的变换继续使用纹理路径。
 
 `GlassSnapshot` 将现有原 DPR 概要快照直接送入 Impeller 独立玻璃层，省去
 抽屉的实时 backdrop 提取，并使用硬件双线性替代每次四点手工插值。

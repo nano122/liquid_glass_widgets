@@ -4,6 +4,10 @@ import 'dart:ui' as ui;
 /// 调用方保证 image 覆盖玻璃后方，并在路由退场结束后才释放；本对象不拥有纹理。
 /// overlayOpacity 对应黑色 ModalBarrier，避免每帧重新捕获遮罩后的整屏背景。
 class GlassSnapshot {
+  /// 创建一份由外部宿主管理生命周期的只读玻璃背景快照描述。
+  ///
+  /// 中文说明：这里只保存纹理引用、根视图原点和遮罩透明度，不复制或释放
+  /// [image]；资源所有权始终留在捕获该快照的路由宿主。
   const GlassSnapshot({
     required this.image,
     this.origin = ui.Offset.zero,

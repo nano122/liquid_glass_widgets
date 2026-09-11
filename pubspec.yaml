@@ -41,4 +41,7 @@ flutter:
     - shaders/interactive_indicator.frag
     - shaders/liquid_glass_geometry_blended.frag
     - shaders/liquid_glass_final_render.frag
+    # 中文说明：Windows 原生 Impeller/OpenGLESSDF 不编译超椭圆 mode 2，
+    # 其余 uniform 与合成逻辑必须和通用版本保持一致。
+    - shaders/liquid_glass_final_render_windows.frag
     - shaders/progressive_blur.frag
