@@ -9,7 +9,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: c8f2882e
+  // POIESIS_EDGE_TREATMENT_ADLER32: e2f2eaaa
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -188,16 +188,16 @@ void main() {
   // Convert to local logical position (0 to uSize)
   // Note: uOrigin is (0,0) and uScale is (1,1) due to layer boundaries
   vec2 localLogical = (fragPx - uOrigin) / uScale;
-  // 中文说明：交互指示器与普通玻璃共用局部逻辑高度。小尺寸使用顶部
-  // 15% / 底部 30%，大尺寸封顶 10dp / 20dp；按压缩放时仍跟随胶囊本体。
-  float glassVerticalPosition = clamp(
-    localLogical.y / max(uSize.y, 0.0001),
+  // 中文说明：自适应高光根据长宽比自动在胶囊平直高光与圆形月牙高光之间平滑融合；
+  // 指示器胶囊拉伸缩放时高光形态平滑连续过渡。
+  vec2 localUV = clamp(
+    localLogical / max(uSize, vec2(0.0001)),
     0.0,
     1.0
   );
-  float verticalAreaHighlightExposureLift = getVerticalAreaHighlightExposureLift(
-    glassVerticalPosition,
-    uSize.y
+  float verticalAreaHighlightExposureLift = getAdaptiveAreaHighlightExposureLift(
+    localUV,
+    uSize
   );
   vec2 center = uSize * 0.5;
   vec2 normalizedP = (localLogical - center) / center;

@@ -10,7 +10,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: c8f2882e
+  // POIESIS_EDGE_TREATMENT_ADLER32: e2f2eaaa
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -226,16 +226,16 @@ void main() {
   // ---- STAGE 0: COORDINATE SYNC ----
   vec2 pixelCoord = FlutterFragCoord().xy;
   vec2 localLogical = (pixelCoord - uOrigin) / uScale;
-  // 中文说明：区域高光使用玻璃本地逻辑高度。小尺寸保留 15% / 30% 比例，
-  // 大尺寸分别封顶 10dp / 20dp；正常缩放和非等比 jelly 拉伸仍跟随主体。
-  float glassVerticalPosition = clamp(
-    localLogical.y / max(uSize.y, 0.0001),
+  // 中文说明：自适应高光根据长宽比自动在胶囊平直高光与圆形月牙高光之间平滑融合；
+  // 零模糊或轻量级路径复用此几何尺寸，大长条保持 10dp/20dp 封顶，圆形启用月牙贴合。
+  vec2 localUV = clamp(
+    localLogical / max(uSize, vec2(0.0001)),
     0.0,
     1.0
   );
-  float verticalAreaHighlightExposureLift = getVerticalAreaHighlightExposureLift(
-    glassVerticalPosition,
-    uSize.y
+  float verticalAreaHighlightExposureLift = getAdaptiveAreaHighlightExposureLift(
+    localUV,
+    uSize
   );
 
   // ---- STAGE 1/2: SDF SHAPE & SURFACE NORMAL ----

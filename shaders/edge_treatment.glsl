@@ -259,21 +259,19 @@ float getInnerHighlightGate(
     return insetGate + rimStyleInput;
 }
 
-// 中文说明：上下高光是容器内部的面积反射，不是另一条细描边。
-// 大尺寸（高度超过 67dp，如长条胶囊底栏、搜索框、卡片）按原有设计分别限制在
-// 顶部 10 / 底部 20 logical px（Flutter 中等价于 dp），且占比基准为顶部 15% / 底部 30%，
-// 峰值平台分别封顶在 2 / 3 logical px（基准 3% / 4%）。
-// 当容器高度降至小尺寸范围（24~48dp，如圆球、圆形进度指示器、按钮徽标）时，
-// 由于曲面极点处水平弦长急剧收缩，微小圆冠面积相较长条大容器剧降数十倍，容易被边缘描边吞没。
-// 为此引入连续小尺寸自适应因子（smallFactor，在 24dp~67dp 平滑过渡）：
-// 1. 顶部高光覆盖比例自适应放宽至 28%（保底约 7.0dp 深度），底部放宽至 36%（保底约 9.0dp 深度）；
-// 2. 顶部峰值平台放宽至 7%（保底约 1.8dp），底部平台放宽至 8%（保底约 2.2dp），
-//    确保圆球顶部的有效满曝光带不被 0.36dp 结构描边挤占；
-// 3. 离开平台后的衰减曲率在小尺寸下平缓软化（幂次由 1.0 平滑过渡至 0.75），
-//    模拟真实球面的漫射晕染，避免高光退化为狭窄断层；
-// 4. 大尺寸小尺寸因子为 0.0，完全维持原有 10dp/20dp 封顶与 15%/30% 比例不变。
-// 提亮不再混向固定白点，而是由背景色逐通道加权剩余亮度空间，并经过 Rec.709 U 型门控。
-// 参数集中在共享 include 中，保证 Premium、Standard 与交互指示器一致。
+// 中文说明：高光形态区分以容器长宽比（Aspect Ratio）为核心依据：
+// 1. 长条胶囊容器（aspectRatio >= 2.2，如长条底栏、搜索框、药丸按钮）：
+//    保留水平平直的高光带，顶部限制在 15%（封顶 10dp）、底部限制在 30%（封顶 20dp），
+//    峰值平台分别封顶在 2dp / 3dp，保持克制干练的长直反射。
+// 2. 圆形/正方形容器（aspectRatio -> 1.0，如各尺寸圆球、圆形进度指示器、按钮徽标）：
+//    启用贴合圆弧轮廓的“月牙弧光（Crescent Arc Highlight）”。高光等高线严格
+//    沿着顶部圆弧向内等距推进（d_crest = p.y + sqrt(max(1.0 - p.x^2, 0.0))），
+//    两端随圆弧曲率优雅收窄，向球心舒展漫射，避免在圆顶缩成难看的窄缝或水平一刀切切片；
+// 3. 在 aspectRatio 1.0 ~ 2.2 之间使用三次 smoothstep 连续过渡，
+//    无论静态尺寸还是动态 jelly 变形拉伸，高光形态均丝滑演变、无突变跳变。
+const float kShapeTransitionCircle = 1.0;
+const float kShapeTransitionCapsule = 2.2;
+
 const float kTopAreaHighlightExtent = 0.15;
 const float kBottomAreaHighlightExtent = 0.30;
 const float kTopAreaHighlightPlateau = 0.03;
@@ -283,14 +281,11 @@ const float kBottomAreaHighlightMaxLogicalHeight = 20.0;
 const float kTopAreaHighlightPlateauMaxLogicalHeight = 2.0;
 const float kBottomAreaHighlightPlateauMaxLogicalHeight = 3.0;
 
-// 中文说明：小尺寸容器（如 24~48dp 圆球）的自适应基准参数
-const float kSmallGlassTransitionStart = 67.0;
-const float kSmallGlassTransitionEnd = 24.0;
-const float kTopAreaHighlightSmallExtent = 0.28;
-const float kBottomAreaHighlightSmallExtent = 0.36;
-const float kTopAreaHighlightSmallPlateau = 0.07;
-const float kBottomAreaHighlightSmallPlateau = 0.08;
-const float kAreaHighlightSmallFalloffPower = 0.75;
+// 中文说明：圆形月牙贴合高光几何参数
+const float kCrescentTopExtent = 0.45;
+const float kCrescentTopPlateau = 0.12;
+const float kCrescentBottomExtent = 0.40;
+const float kCrescentBottomPlateau = 0.10;
 
 const float kAreaHighlightMiddleBackdropGate = 0.25;
 const float kAreaHighlightDarkPeakGate = 0.50;
@@ -300,83 +295,99 @@ const float kAreaHighlightLightRiseStartLuma = 0.90;
 const float kAreaHighlightLightFullLuma = 1.00;
 const vec3 kAreaHighlightLumaWeights = vec3(0.2126, 0.7152, 0.0722);
 
+float getAdaptiveAreaHighlightExposureLift(
+    vec2 localUV,
+    vec2 glassLogicalSize
+) {
+    vec2 safeSize = max(glassLogicalSize, vec2(0.0001));
+    vec2 clampedUV = clamp(localUV, 0.0, 1.0);
+
+    // 中文说明：计算长宽比与圆形/球体因子。aspectRatio 从 1.0（正圆）到 2.2（典型胶囊）
+    // 连续过渡；roundFactor 为 1.0 时为纯圆球，0.0 时为纯长条胶囊。
+    float maxDim = max(safeSize.x, safeSize.y);
+    float minDim = min(safeSize.x, safeSize.y);
+    float aspectRatio = maxDim / max(minDim, 0.0001);
+    float roundFactor = 1.0 - smoothstep(
+        kShapeTransitionCircle,
+        kShapeTransitionCapsule,
+        aspectRatio
+    );
+
+    // ---- 1. 长条胶囊平直线性高光（Capsule Highlight） ----
+    float effectiveTopExtent = min(
+        kTopAreaHighlightExtent,
+        kTopAreaHighlightMaxLogicalHeight / safeSize.y
+    );
+    float effectiveBottomExtent = min(
+        kBottomAreaHighlightExtent,
+        kBottomAreaHighlightMaxLogicalHeight / safeSize.y
+    );
+    float effectiveTopPlateau = min(
+        kTopAreaHighlightPlateau,
+        kTopAreaHighlightPlateauMaxLogicalHeight / safeSize.y
+    );
+    float effectiveBottomPlateau = min(
+        kBottomAreaHighlightPlateau,
+        kBottomAreaHighlightPlateauMaxLogicalHeight / safeSize.y
+    );
+
+    float capsuleTop = 1.0 - smoothstep(
+        effectiveTopPlateau,
+        effectiveTopExtent,
+        clampedUV.y
+    );
+    float capsuleBottom = smoothstep(
+        1.0 - effectiveBottomExtent,
+        1.0 - effectiveBottomPlateau,
+        clampedUV.y
+    );
+    float capsuleHighlight = clamp(capsuleTop + capsuleBottom, 0.0, 1.0);
+
+    // ---- 2. 圆形/球体贴合圆弧月牙高光（Crescent Arc Highlight） ----
+    // 中文说明：将 UV 映射到以中心为原点的归一化圆盘 [-1, 1]
+    vec2 p = (clampedUV - vec2(0.5)) * 2.0;
+
+    // 顶部月牙：计算片元相对于顶部外圆弧的内向垂直深度
+    // 任意水平位置 x 处的外圆弧 Y 坐标为 -sqrt(1 - x^2)
+    float topArcY = -sqrt(max(1.0 - p.x * p.x, 0.0));
+    float inwardDepthTop = p.y - topArcY;
+    float arcSpanTop = smoothstep(0.0, 0.35, 1.0 - p.x * p.x) * clamp(-p.y, 0.0, 1.0);
+    float topCrescentProfile = 1.0 - smoothstep(
+        kCrescentTopPlateau,
+        kCrescentTopExtent,
+        inwardDepthTop
+    );
+    float topCrescent = pow(max(topCrescentProfile, 0.0), 0.85) * arcSpanTop;
+
+    // 底部托底月牙：计算片元相对于底部外圆弧的内向垂直深度
+    float bottomArcY = sqrt(max(1.0 - p.x * p.x, 0.0));
+    float inwardDepthBottom = bottomArcY - p.y;
+    float arcSpanBottom = smoothstep(0.0, 0.40, 1.0 - p.x * p.x) * clamp(p.y, 0.0, 1.0);
+    float bottomCrescentProfile = smoothstep(
+        kCrescentBottomExtent,
+        kCrescentBottomPlateau,
+        inwardDepthBottom
+    );
+    float bottomCrescent = pow(max(bottomCrescentProfile, 0.0), 0.90) * arcSpanBottom * 0.70;
+
+    float crescentHighlight = clamp(topCrescent + bottomCrescent, 0.0, 1.0);
+
+    // 中文说明：按圆形度因子在胶囊平直高光与圆形月牙高光之间连续插值
+    return clamp(
+        mix(capsuleHighlight, crescentHighlight, roundFactor),
+        0.0,
+        1.0
+    );
+}
+
 float getVerticalAreaHighlightExposureLift(
     float normalizedVerticalPosition,
     float glassLogicalHeight
 ) {
-    float verticalPosition = clamp(normalizedVerticalPosition, 0.0, 1.0);
-    float safeGlassLogicalHeight = max(glassLogicalHeight, 0.0001);
-
-    // 中文说明：计算小尺寸平滑过渡因子。高度在 67dp 以上为 0.0（纯大尺寸/长条容器），
-    // 在 24dp 以下饱和为 1.0（纯小尺寸/圆球）；中间使用 smoothstep 连续过渡，无视觉跳变。
-    float smallFactor = 1.0 - smoothstep(
-        kSmallGlassTransitionEnd,
-        kSmallGlassTransitionStart,
-        safeGlassLogicalHeight
-    );
-
-    // 中文说明：小尺寸下自适应放宽比例上限并提供物理逻辑深度保底；
-    // 大尺寸则严格限制在 10dp / 20dp（平台 2dp / 3dp）与 15% / 30% 比例。
-    float baseTopExtent = mix(
-        kTopAreaHighlightExtent,
-        kTopAreaHighlightSmallExtent,
-        smallFactor
-    );
-    float baseBottomExtent = mix(
-        kBottomAreaHighlightExtent,
-        kBottomAreaHighlightSmallExtent,
-        smallFactor
-    );
-    float baseTopPlateau = mix(
-        kTopAreaHighlightPlateau,
-        kTopAreaHighlightSmallPlateau,
-        smallFactor
-    );
-    float baseBottomPlateau = mix(
-        kBottomAreaHighlightPlateau,
-        kBottomAreaHighlightSmallPlateau,
-        smallFactor
-    );
-
-    float effectiveTopExtent = min(
-        baseTopExtent,
-        kTopAreaHighlightMaxLogicalHeight / safeGlassLogicalHeight
-    );
-    float effectiveBottomExtent = min(
-        baseBottomExtent,
-        kBottomAreaHighlightMaxLogicalHeight / safeGlassLogicalHeight
-    );
-    float effectiveTopPlateau = min(
-        baseTopPlateau,
-        kTopAreaHighlightPlateauMaxLogicalHeight / safeGlassLogicalHeight
-    );
-    float effectiveBottomPlateau = min(
-        baseBottomPlateau,
-        kBottomAreaHighlightPlateauMaxLogicalHeight / safeGlassLogicalHeight
-    );
-
-    // 中文说明：smoothstep 从峰值平台边界平滑过渡到区域外边缘；
-    // 离开平台后的衰减曲率在小尺寸下通过 falloffPower 平滑软化至 0.75，
-    // 呈现球面漫射过渡；大尺寸 falloffPower 为 1.0，完全等价于标准 smoothstep。
-    float topFalloff = 1.0 - smoothstep(
-        effectiveTopPlateau,
-        effectiveTopExtent,
-        verticalPosition
-    );
-    float bottomFalloff = smoothstep(
-        1.0 - effectiveBottomExtent,
-        1.0 - effectiveBottomPlateau,
-        verticalPosition
-    );
-
-    float falloffPower = mix(1.0, kAreaHighlightSmallFalloffPower, smallFactor);
-    float topHighlight = pow(max(topFalloff, 0.0), falloffPower);
-    float bottomHighlight = pow(max(bottomFalloff, 0.0), falloffPower);
-
-    return clamp(
-        topHighlight + bottomHighlight,
-        0.0,
-        1.0
+    // 中文说明：向后兼容旧调用，默认按标准长条胶囊处理
+    return getAdaptiveAreaHighlightExposureLift(
+        vec2(0.5, normalizedVerticalPosition),
+        vec2(glassLogicalHeight * 3.0, glassLogicalHeight)
     );
 }
 

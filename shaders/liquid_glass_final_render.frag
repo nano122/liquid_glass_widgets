@@ -34,7 +34,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: c8f2882e
+// POIESIS_EDGE_TREATMENT_ADLER32: e2f2eaaa
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
@@ -409,6 +409,7 @@ void main() {
     // 中文说明：Premium 的尺寸来源可能是本地逻辑像素，也可能是捕获兼容
     // 路径的物理像素。提前还原 DPR，确保后续 10 / 20 的上限始终表示 dp。
     float dpr = max(1.0, uEdgeConfig.z * 3.0);
+    vec2 glassLogicalSize;
     float glassLogicalHeight;
     if (uAnalyticRect.w > 0.5) {
         // 中文说明：FlutterFragCoord 属于官方根 backdrop 表面；Dart 已把
@@ -416,6 +417,7 @@ void main() {
         // 不把横向拉伸后的椭圆角错误近似成屏幕轴对齐的圆角。
         vec2 localPoint = geometryLocalPointFromFragment(fragCoord);
         geometryUV = clamp(localPoint / max(uAnalyticRect.xy, vec2(0.001)), 0.0, 1.0);
+        glassLogicalSize = uAnalyticRect.xy;
         glassVerticalPosition = geometryUV.y;
         glassLogicalHeight = uAnalyticRect.y;
         geometryData = analyticRoundedRectGeometry(localPoint, uThickness);
@@ -429,6 +431,7 @@ void main() {
             geometryUV = (textureLocalPoint - uGeometryOffset) / uGeometrySize;
             // 中文说明：有效逆仿射路径写入的是纹理本地逻辑边界，可直接作为
             // dp 高度使用，旋转和非等比缩放不会改变设计空间中的高光上限。
+            glassLogicalSize = uGeometrySize;
             glassLogicalHeight = uGeometrySize.y;
         } else {
             // 捕获纹理或透视矩阵无法用 2x3 仿射精确表达，保留原屏幕包围盒
@@ -437,6 +440,7 @@ void main() {
             geometryUV = (textureScreenPoint - uGeometryOffset) / uGeometrySize;
             // 中文说明：捕获或透视兼容路径的边界是物理像素，必须除以 DPR
             // 才能与另外两条 Premium 分支共享 10dp / 20dp 的逻辑上限。
+            glassLogicalSize = uGeometrySize / dpr;
             glassLogicalHeight = uGeometrySize.y / dpr;
         }
         // 中文说明：先保存几何本地的纵向比例，再处理旧 GLES 的纹理 Y 翻转。
@@ -459,11 +463,11 @@ void main() {
         geometryData = texture(uGeometryTexture, geometryUV);
     }
 
-    // 中文说明：面积高光的空间曲线只依赖玻璃局部位置与既有几何高度；颜色
-    // 会在最终合成时复用折射背景样本，不增加纹理读取、uniform 或渲染 Pass。
-    float verticalAreaHighlightExposureLift = getVerticalAreaHighlightExposureLift(
-        glassVerticalPosition,
-        glassLogicalHeight
+    // 中文说明：自适应高光根据长宽比自动在胶囊平直高光与圆形月牙高光之间平滑融合；
+    // 颜色会在最终合成时复用折射背景样本，不增加纹理读取、uniform 或渲染 Pass。
+    float verticalAreaHighlightExposureLift = getAdaptiveAreaHighlightExposureLift(
+        geometryUV,
+        glassLogicalSize
     );
 
     // 中文说明：0.36 / 0.18 logical px 先换成名义物理宽度；不足一物理像素
