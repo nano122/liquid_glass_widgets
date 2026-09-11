@@ -520,6 +520,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
           ..setFloatUniforms(initialIndex: 45, (value) {
             value.setFloat(settings.refractionEnabled ? 1.0 : 0.0);
           })
+          // Slot 46：共享 Shader 会跨组件复用，因此普通 backdrop 路径必须
+          // 每次覆盖顶部折射限制，避免上一组件的性能策略泄漏到当前组件。
+          ..setFloatUniforms(initialIndex: 46, (value) {
+            value.setFloat(settings.topRefractionOnly ? 1.0 : 0.0);
+          })
           ..setImageSampler(
             1,
             geometryImage,
@@ -775,6 +780,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
       // tint、饱和度与光照合成，只跳过折射、pinch 和色散偏移。
       ..setFloatUniforms(initialIndex: 45, (value) {
         value.setFloat(settings.refractionEnabled ? 1.0 : 0.0);
+      })
+      // Slot 46：显式捕获与普通 backdrop 共用最终 Shader；逐次同步区域
+      // 开关，确保平台视图兼容路径也只在本地顶部约 20% 折射。
+      ..setFloatUniforms(initialIndex: 46, (value) {
+        value.setFloat(settings.topRefractionOnly ? 1.0 : 0.0);
       })
       // Slot 0: captured background image (replaces the BackdropFilter read).
       ..setImageSampler(0, capture)

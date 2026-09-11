@@ -10,7 +10,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: e2f2eaaa
+  // POIESIS_EDGE_TREATMENT_ADLER32: eed60717
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -47,6 +47,9 @@ uniform float uDpr;
 // 关闭后仍执行同一材质合成、光照、Fresnel、边缘吸收与 tint，避免组件
 // 因没有可折射背景而退化成另一种视觉样式。
 uniform float uRefractionEnabled;
+// 36: uTopRefractionOnly — 开启时仅顶部约 20% 执行折射、pinch 与 RGB 色散；
+// 下方仍以原坐标读取背景，保留完整材质与光照合成。
+uniform float uTopRefractionOnly;
 
 uniform sampler2D uBackground; // The captured background texture
 // Slot 22 (uData5.z): specular sharpness level — passed as float 0.0/1.0/2.0, cast to int.
@@ -477,6 +480,13 @@ void main() {
 
   // ---- STAGE 8: FINAL COMPOSITE ----
   float vertCoord = localLogical.y / max(uSize.y, 1.0);
+  // 中文说明：三条渲染路径共用相同 16%～20% 平滑门控；Standard 的本地
+  // 坐标不受背景纹理原点影响，因此该值始终表示组件自身的顶部。
+  float refractionAreaGate = getRefractionAreaGate(
+    vertCoord,
+    uRefractionEnabled,
+    uTopRefractionOnly
+  );
 
   // PATH-SPECIFIC frosted-glass material weight.
   // PATH A (BG texture): background ALREADY provides visual presence. Adding white frost
@@ -553,7 +563,7 @@ void main() {
       vec2 edgeOffset = surfaceNormal * edgeInfluence * uThickness * 0.5;
       // 中文说明：独立开关只归零背景采样位移，不改写 thickness；后者仍用于
       // rim、Fresnel 与材质深度计算，确保关闭折射后其余观感保持一致。
-      edgeOffset *= uRefractionEnabled;
+      edgeOffset *= refractionAreaGate;
       vec2 refractedUV = uv + edgeOffset / uBackgroundSize;
 
       // On pre-3.46 OpenGL ES the background texture uses bottom-left Y origin;
@@ -567,7 +577,7 @@ void main() {
       // 中文说明：色散属于折射采样的一部分。保留原始配置值，只在本次采样
       // 局部乘开关；重新开启时无需恢复或重建任何艺术参数。
       float effectiveChromaticAberration =
-          uChromaticAberration * uRefractionEnabled;
+          uChromaticAberration * refractionAreaGate;
       if (effectiveChromaticAberration < 0.001) {
         // No chromatic aberration — single bilinear fetch.
         bgRgb = texture(uBackground, refractedUV).rgb;

@@ -225,6 +225,12 @@ class AnimatedGlassIndicator extends StatelessWidget {
           override.refractionEnabled != _settingsDefaults.refractionEnabled
               ? override.refractionEnabled
               : null,
+      // 中文说明：顶部折射限制必须像总开关一样穿过 indicator 专用默认配方；
+      // 否则按压或拖动触发设置合并时会静默回到全区域折射。
+      topRefractionOnly:
+          override.topRefractionOnly != _settingsDefaults.topRefractionOnly
+              ? override.topRefractionOnly
+              : null,
       lightAngle: override.lightAngle != _settingsDefaults.lightAngle
           ? override.lightAngle
           : null,

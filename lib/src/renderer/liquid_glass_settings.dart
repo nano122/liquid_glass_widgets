@@ -55,6 +55,7 @@ class LiquidGlassSettings {
     this.blur = 5,
     this.chromaticAberration = .01,
     this.refractionEnabled = true,
+    this.topRefractionOnly = false,
     this.lightAngle = GlassDefaults.lightAngle,
     this.lightIntensity = .5,
     this.ambientStrength = 0,
@@ -89,6 +90,7 @@ class LiquidGlassSettings {
     required this.blur,
     required this.chromaticAberration,
     required this.refractionEnabled,
+    required this.topRefractionOnly,
     required this.lightAngle,
     required this.lightIntensity,
     required this.ambientStrength,
@@ -136,12 +138,14 @@ class LiquidGlassSettings {
     GlassSpecularSharpness specularSharpness = GlassSpecularSharpness.medium,
     double standardOpacityMultiplier = 1.0,
     bool refractionEnabled = true,
+    bool topRefractionOnly = false,
   }) : this(
           visibility: visibility,
           refractiveIndex: 1 + (refraction / 100) * 0.2,
           thickness: depth,
           chromaticAberration: 4 * (dispersion / 100),
           refractionEnabled: refractionEnabled,
+          topRefractionOnly: topRefractionOnly,
           lightIntensity: lightIntensity / 100,
           blur: frost,
           lightAngle: lightAngle,
@@ -247,6 +251,17 @@ class LiquidGlassSettings {
   ///
   /// 默认为 `true`，保证现有组件行为不变。
   final bool refractionEnabled;
+
+  /// 是否只允许玻璃顶部约 20% 的区域执行背景折射。
+  ///
+  /// 设为 `true` 时，组件自身高度的顶部 16% 保持完整折射，16%～20%
+  /// 平滑衰减，20% 以下使用未位移的背景坐标并跳过 RGB 色散与 indicator
+  /// pinch。玻璃色、模糊、饱和度、光照、Fresnel、边缘吸收、白化、形状与
+  /// 交互形变仍覆盖整个玻璃表面。
+  ///
+  /// 该限制只有在 [refractionEnabled] 为 `true` 时才生效；总开关关闭时所有
+  /// 区域仍保持无折射。默认为 `false`，保证既有组件继续全区域折射。
+  final bool topRefractionOnly;
 
   /// The angle of the light source in radians.
   ///
@@ -482,6 +497,7 @@ class LiquidGlassSettings {
         blur: blur,
         chromaticAberration: chromaticAberration,
         refractionEnabled: refractionEnabled,
+        topRefractionOnly: topRefractionOnly,
         lightAngle: lightAngle,
         lightIntensity: lightIntensity,
         ambientStrength: ambientStrength,
@@ -588,6 +604,9 @@ class LiquidGlassSettings {
       // 中文说明：布尔开关没有连续中间态，沿用枚举字段的中点切换规则；
       // 光学数值仍独立插值，重新启用时不会丢失过渡后的配置。
       refractionEnabled: t < 0.5 ? a.refractionEnabled : b.refractionEnabled,
+      // 中文说明：顶部区域限制同样是离散策略；中点切换避免在主题过渡期间
+      // 改变折射区域边界，也与 refractionEnabled 的布尔插值规则保持一致。
+      topRefractionOnly: t < 0.5 ? a.topRefractionOnly : b.topRefractionOnly,
       lightAngle: lerpDouble(a.lightAngle, b.lightAngle, t)!,
       lightIntensity: lerpDouble(a.lightIntensity, b.lightIntensity, t)!,
       ambientStrength: lerpDouble(a.ambientStrength, b.ambientStrength, t)!,
@@ -640,6 +659,7 @@ class LiquidGlassSettings {
     double? blur,
     double? chromaticAberration,
     bool? refractionEnabled,
+    bool? topRefractionOnly,
     double? blend,
     double? lightAngle,
     double? lightIntensity,
@@ -667,6 +687,7 @@ class LiquidGlassSettings {
         blur: blur ?? this.blur,
         chromaticAberration: chromaticAberration ?? this.chromaticAberration,
         refractionEnabled: refractionEnabled ?? this.refractionEnabled,
+        topRefractionOnly: topRefractionOnly ?? this.topRefractionOnly,
         lightAngle: lightAngle ?? this.lightAngle,
         lightIntensity: lightIntensity ?? this.lightIntensity,
         ambientStrength: ambientStrength ?? this.ambientStrength,
@@ -701,6 +722,7 @@ class LiquidGlassSettings {
         other.blur == blur &&
         other.chromaticAberration == chromaticAberration &&
         other.refractionEnabled == refractionEnabled &&
+        other.topRefractionOnly == topRefractionOnly &&
         other.lightAngle == lightAngle &&
         other.lightIntensity == lightIntensity &&
         other.ambientStrength == ambientStrength &&
@@ -730,6 +752,7 @@ class LiquidGlassSettings {
         blur,
         chromaticAberration,
         refractionEnabled,
+        topRefractionOnly,
         lightAngle,
         lightIntensity,
         ambientStrength,

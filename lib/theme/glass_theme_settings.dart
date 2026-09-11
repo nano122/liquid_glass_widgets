@@ -51,6 +51,7 @@ class GlassThemeSettings {
     this.blur,
     this.chromaticAberration,
     this.refractionEnabled,
+    this.topRefractionOnly,
     this.lightAngle,
     this.lightIntensity,
     this.ambientStrength,
@@ -78,6 +79,9 @@ class GlassThemeSettings {
 
   /// See [LiquidGlassSettings.refractionEnabled].
   final bool? refractionEnabled;
+
+  /// See [LiquidGlassSettings.topRefractionOnly].
+  final bool? topRefractionOnly;
 
   /// See [LiquidGlassSettings.lightAngle].
   final double? lightAngle;
@@ -118,6 +122,7 @@ class GlassThemeSettings {
       blur: blur,
       chromaticAberration: chromaticAberration,
       refractionEnabled: refractionEnabled,
+      topRefractionOnly: topRefractionOnly,
       lightAngle: lightAngle,
       lightIntensity: lightIntensity,
       ambientStrength: ambientStrength,
@@ -163,6 +168,9 @@ class GlassThemeSettings {
       // 中文说明：布尔主题覆盖无法数值插值；中点前后分别沿用两端，且 null
       // 继续表示“不覆盖组件设置”。
       refractionEnabled: t < 0.5 ? a.refractionEnabled : b.refractionEnabled,
+      // 中文说明：区域限制属于离散策略，主题过渡到中点时再切换，避免比例
+      // 在动画中漂移并确保 null 始终保留“不覆盖组件设置”的含义。
+      topRefractionOnly: t < 0.5 ? a.topRefractionOnly : b.topRefractionOnly,
       lightAngle: _lerpDoubleField(a.lightAngle, b.lightAngle, t),
       lightIntensity: _lerpDoubleField(a.lightIntensity, b.lightIntensity, t),
       ambientStrength:
@@ -195,6 +203,7 @@ class GlassThemeSettings {
     double? blur,
     double? chromaticAberration,
     bool? refractionEnabled,
+    bool? topRefractionOnly,
     double? lightAngle,
     double? lightIntensity,
     double? ambientStrength,
@@ -211,6 +220,7 @@ class GlassThemeSettings {
       blur: blur ?? this.blur,
       chromaticAberration: chromaticAberration ?? this.chromaticAberration,
       refractionEnabled: refractionEnabled ?? this.refractionEnabled,
+      topRefractionOnly: topRefractionOnly ?? this.topRefractionOnly,
       lightAngle: lightAngle ?? this.lightAngle,
       lightIntensity: lightIntensity ?? this.lightIntensity,
       ambientStrength: ambientStrength ?? this.ambientStrength,
@@ -233,6 +243,7 @@ class GlassThemeSettings {
           blur == other.blur &&
           chromaticAberration == other.chromaticAberration &&
           refractionEnabled == other.refractionEnabled &&
+          topRefractionOnly == other.topRefractionOnly &&
           lightAngle == other.lightAngle &&
           lightIntensity == other.lightIntensity &&
           ambientStrength == other.ambientStrength &&
@@ -250,6 +261,7 @@ class GlassThemeSettings {
         blur,
         chromaticAberration,
         refractionEnabled,
+        topRefractionOnly,
         lightAngle,
         lightIntensity,
         ambientStrength,
@@ -267,6 +279,7 @@ class GlassThemeSettings {
       'blur: $blur, '
       'glassColor: $glassColor, '
       'refractionEnabled: $refractionEnabled, '
+      'topRefractionOnly: $topRefractionOnly, '
       'edgeAbsorption: $edgeAbsorption'
       ')';
 }

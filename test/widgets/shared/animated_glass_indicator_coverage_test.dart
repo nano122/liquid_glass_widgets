@@ -103,6 +103,19 @@ void main() {
       expect(glass.settings.refractionEnabled, isFalse);
     });
 
+    testWidgets('顶部折射限制穿过 indicator 默认配方合并', (tester) async {
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.5,
+        settings: const LiquidGlassSettings(topRefractionOnly: true),
+      )));
+      await tester.pump();
+
+      // 中文注释：直接检查最终 Shader 宿主收到的设置，覆盖 indicator 的逐字段
+      // 合并路径，避免首次按压或拖动时从默认配方恢复全区域折射。
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.topRefractionOnly, isTrue);
+    });
+
     testWidgets('multiple non-default fields exercise several branches',
         (tester) async {
       await tester.pumpWidget(_wrap(_make(

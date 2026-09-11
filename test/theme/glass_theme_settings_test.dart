@@ -126,5 +126,39 @@ void main() {
       );
       expect(enabled, isNot(equals(disabled)));
     });
+
+    test('topRefractionOnly 可由主题开启且空主题保留组件值', () {
+      const topOnlyBase = LiquidGlassSettings(topRefractionOnly: true);
+      const fullAreaBase = LiquidGlassSettings(topRefractionOnly: false);
+
+      // 中文注释：空主题继续表示“不覆盖”；显式值则允许应用在整个主题子树
+      // 开启性能策略，同时不改变总折射开关及其他材质参数。
+      expect(
+        const GlassThemeSettings().applyTo(topOnlyBase).topRefractionOnly,
+        isTrue,
+      );
+      final themed = const GlassThemeSettings(
+        topRefractionOnly: true,
+      ).applyTo(fullAreaBase);
+      expect(themed.topRefractionOnly, isTrue);
+      expect(themed.refractionEnabled, fullAreaBase.refractionEnabled);
+      expect(themed.blur, fullAreaBase.blur);
+    });
+
+    test('topRefractionOnly 参与主题 copyWith、lerp 和相等性', () {
+      const fullArea = GlassThemeSettings(topRefractionOnly: false);
+      const topOnly = GlassThemeSettings(topRefractionOnly: true);
+
+      expect(fullArea.copyWith(topRefractionOnly: true), topOnly);
+      expect(
+        GlassThemeSettings.lerp(fullArea, topOnly, 0.49)!.topRefractionOnly,
+        isFalse,
+      );
+      expect(
+        GlassThemeSettings.lerp(fullArea, topOnly, 0.5)!.topRefractionOnly,
+        isTrue,
+      );
+      expect(fullArea, isNot(equals(topOnly)));
+    });
   });
 }

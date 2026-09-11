@@ -1076,5 +1076,9 @@ class _RenderLightweightGlass extends RenderProxyBox
     // 中文说明：继续传递 thickness、折射率和色散原值，使光照与材质参数保持
     // 稳定，切回开启状态时也无需重建设置。
     shader.setFloat(index++, _settings.refractionEnabled ? 1.0 : 0.0);
+
+    // 36: uTopRefractionOnly — 开启后只有组件本地顶部约 20% 使用折射、
+    // pinch 与多通道色散，下方区域仍保留一次原坐标采样完成材质合成。
+    shader.setFloat(index++, _settings.topRefractionOnly ? 1.0 : 0.0);
   }
 }

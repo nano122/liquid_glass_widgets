@@ -493,5 +493,52 @@ void main() {
         expect(settings.chromaticAberration, closeTo(1.6, 1e-10));
       });
     });
+
+    group('topRefractionOnly', () {
+      test('默认关闭，既有组件继续全区域折射', () {
+        const settings = LiquidGlassSettings();
+        expect(settings.topRefractionOnly, isFalse);
+      });
+
+      test('copyWith 和交互 pinch 传递都保留顶部限制', () {
+        const settings = LiquidGlassSettings(topRefractionOnly: true);
+
+        // 中文注释：pinch 是交互指示器每帧重建设定的内部路径；同时锁定普通
+        // copyWith，防止任何材质参数更新后区域限制静默回退到默认 false。
+        expect(settings.copyWith(blur: 12).topRefractionOnly, isTrue);
+        expect(settings.copyWithPinch(0.7).topRefractionOnly, isTrue);
+      });
+
+      test('离散限制在 lerp 中点切换并参与相等性', () {
+        const fullArea = LiquidGlassSettings(topRefractionOnly: false);
+        const topOnly = LiquidGlassSettings(topRefractionOnly: true);
+
+        expect(
+          LiquidGlassSettings.lerp(fullArea, topOnly, 0.49).topRefractionOnly,
+          isFalse,
+        );
+        expect(
+          LiquidGlassSettings.lerp(fullArea, topOnly, 0.5).topRefractionOnly,
+          isTrue,
+        );
+        expect(fullArea, isNot(equals(topOnly)));
+      });
+
+      test('figma 构造器允许启用顶部限制且不改写折射参数', () {
+        const settings = LiquidGlassSettings.figma(
+          refraction: 80,
+          depth: 20,
+          dispersion: 40,
+          frost: 5,
+          topRefractionOnly: true,
+        );
+
+        // 中文注释：区域限制只决定 Shader 在哪里执行折射，不应通过压低折射率
+        // 或色散强度模拟，否则关闭限制后无法恢复调用者原始视觉配置。
+        expect(settings.topRefractionOnly, isTrue);
+        expect(settings.refractiveIndex, closeTo(1.16, 1e-10));
+        expect(settings.chromaticAberration, closeTo(1.6, 1e-10));
+      });
+    });
   });
 }

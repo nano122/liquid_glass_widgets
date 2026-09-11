@@ -48,6 +48,35 @@ const float kEdgeRgssInvCount = 0.125;
 // “名义宽度 / 有效宽度”降低能量，能够获得连续轮廓，同时保持原有累计视觉重量。
 const float kMinPhysicalRimWidth = 1.0;
 
+// 中文说明：顶部折射限制由三条 Shader 共用同一纵向门控，避免 Premium、
+// Standard 与交互指示器出现区域边界不一致。顶部 16% 保持完整折射，随后
+// 在 16%～20% 内平滑归零；20% 以下因此能跳过位移、pinch 和三通道色散，
+// 但仍保留一次原坐标背景采样供 tint、饱和度与亮度自适应使用。
+const float kTopRefractionFullEnd = 0.16;
+const float kTopRefractionFadeEnd = 0.20;
+
+float getRefractionAreaGate(
+    float normalizedVerticalPosition,
+    float refractionEnabled,
+    float topRefractionOnly
+) {
+    // 中文说明：先处理总开关，保证 refractionEnabled=false 的语义永远优先；
+    // 未开启区域限制时直接返回 1，维持既有全表面折射且不改变任何艺术参数。
+    if (refractionEnabled < 0.5) return 0.0;
+    if (topRefractionOnly < 0.5) return 1.0;
+
+    float safeVerticalPosition = clamp(
+        normalizedVerticalPosition,
+        0.0,
+        1.0
+    );
+    return 1.0 - smoothstep(
+        kTopRefractionFullEnd,
+        kTopRefractionFadeEnd,
+        safeVerticalPosition
+    );
+}
+
 vec2 getEnergyPreservingRimProfile(float nominalPhysicalWidth) {
     float safeNominalWidth = max(nominalPhysicalWidth, 0.0001);
     float effectivePhysicalWidth = max(

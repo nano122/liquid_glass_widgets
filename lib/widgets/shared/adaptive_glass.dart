@@ -366,6 +366,9 @@ class AdaptiveGlass extends StatelessWidget {
               // 中文说明：分组 elevation 会重建一份轻量设置；透传开关避免
               // 嵌套按钮在获得层级增强时意外恢复背景折射。
               refractionEnabled: normalizedSettings.refractionEnabled,
+              // 中文说明：elevation 重建不能丢失顶部折射限制，否则同一组件
+              // 会在进入分组层级后突然恢复全区域折射并重新增加采样成本。
+              topRefractionOnly: normalizedSettings.topRefractionOnly,
               blur: normalizedSettings.effectiveBlur,
               visibility: normalizedSettings.visibility,
               saturation: normalizedSettings.effectiveSaturation,

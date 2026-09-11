@@ -273,10 +273,11 @@ void main() {
       expect(find.byType(SizedBox), findsWidgets);
     });
 
-    testWidgets('elevation 设置重建不会重新开启折射', (tester) async {
+    testWidgets('elevation 设置重建保留折射总开关和顶部限制', (tester) async {
       const disabledSettings = LiquidGlassSettings(
         blur: 5,
         refractionEnabled: false,
+        topRefractionOnly: true,
       );
       await tester.pumpWidget(MaterialApp(
         home: Scaffold(
@@ -308,6 +309,7 @@ void main() {
         find.byType(LightweightLiquidGlass).first,
       );
       expect(lightweight.settings!.refractionEnabled, isFalse);
+      expect(lightweight.settings!.topRefractionOnly, isTrue);
     });
   });
 

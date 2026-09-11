@@ -34,7 +34,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: e2f2eaaa
+// POIESIS_EDGE_TREATMENT_ADLER32: eed60717
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
@@ -119,6 +119,10 @@ uniform float uPlatformViewMode;
 // Slot 45：背景折射总开关。关闭时背景仍以原坐标参与 tint、饱和度和亮度
 // 自适应，但不再发生法线位移、RGB 色散或 indicator pinch；材质其余阶段不变。
 uniform float uRefractionEnabled;
+
+// Slot 46：顶部折射区域限制。开启后仅玻璃本地顶部约 20% 获得折射，
+// 其余区域保留材质合成但改走原坐标单样本路径，降低大面积玻璃的采样成本。
+uniform float uTopRefractionOnly;
 
 // uThickness directly and is already DPR-independent).
 // uniform float uRefractScale; // Removed in favor of scaling uThickness
@@ -550,33 +554,41 @@ void main() {
     float normalZ   = sqrt(normalZSq);
     vec3  normal    = vec3(normalXY, normalZ);   // unit-length surface normal
 
-    // Recompute refraction displacement from the true normal.
-    // This is the same refract() call used in the geometry pass — exact, not
-    // approximated.  Height is still read from the B channel.
-    float height = decodeHeight(geometryData, uThickness);
-    float baseHeight = uThickness * 8.0;
-    vec3  incident   = vec3(0.0, 0.0, -1.0);
-    float invN       = 1.0 / max(uRefractiveIndex, 0.001);
-    vec3  baseRefract = refract(incident, normal, invN);
-    float refractLen  = (height + baseHeight) / max(0.001, abs(baseRefract.z));
-    vec2  displacement = baseRefract.xy * refractLen;
-    // Scale displacement by uRefractScale (uOpticalProps.w) to ensure logical-pixel
-    // identical refraction magnitude across all device pixel ratios.
-    displacement *= uOpticalProps.w;
-    // On pre-3.46 OpenGL ES, screenUV.y is flipped to (1.0 - y) above to
-    // compensate for the bottom-left texture-origin convention.  The
-    // displacement is computed in Flutter's native Y-down space (outward normal
-    // at the bottom edge has +Y), but adding a positive Y delta to the flipped
-    // UV moves the sample TOWARD the centre rather than away — inverting the
-    // refraction.  Negating displacement.y re-aligns it with the Y-up UV
-    // sampling space.  Gated on the same condition as the UV flip itself: on
-    // 3.46+ the UV is not flipped, so negating here would invert refraction.
-    #ifdef LGR_GLES_FLIP_SAMPLE_Y
-        displacement.y = -displacement.y;
-    #endif
-    // 中文说明：只归零背景采样位移，保留 normal、height 与 thickness 供后续
-    // 光照、Fresnel、弯月面吸收和结构边使用，避免关闭折射时材质外观突变。
-    displacement *= uRefractionEnabled;
+    // 中文说明：区域门控使用保存于 GLES 翻转前的玻璃本地纵向坐标，因此
+    // 旋转、jelly 缩放、捕获模式或纹理原点差异都不会把顶部 20% 颠倒。
+    float refractionAreaGate = getRefractionAreaGate(
+        glassVerticalPosition,
+        uRefractionEnabled,
+        uTopRefractionOnly
+    );
+    float normalMagnitudeSquared = dot(normalXY, normalXY);
+    vec2 displacement = vec2(0.0);
+
+    // 中文说明：20% 以下以及全局关闭时直接跳过 refract、decodeHeight 和
+    // 相关除法；平坦内部同样无需计算位移。normal、thickness 仍供后续光照、
+    // Fresnel、弯月面吸收和结构边使用，材质外观不会随优化路径发生突变。
+    if (refractionAreaGate > 0.0 && normalMagnitudeSquared >= 1e-4) {
+        // Recompute refraction displacement from the true normal.
+        // This is the same refract() call used in the geometry pass — exact,
+        // not approximated. Height is still read from the B channel.
+        float height = decodeHeight(geometryData, uThickness);
+        float baseHeight = uThickness * 8.0;
+        vec3 incident = vec3(0.0, 0.0, -1.0);
+        float invN = 1.0 / max(uRefractiveIndex, 0.001);
+        vec3 baseRefract = refract(incident, normal, invN);
+        float refractLen =
+            (height + baseHeight) / max(0.001, abs(baseRefract.z));
+        displacement = baseRefract.xy * refractLen;
+        // Scale displacement by uRefractScale (uOpticalProps.w) to ensure
+        // logical-pixel identical refraction magnitude across all DPRs.
+        displacement *= uOpticalProps.w * refractionAreaGate;
+
+        // On pre-3.46 GLES the sampling UV is Y-up, while the decoded normal
+        // remains in Flutter's Y-down space. Correct only the active offset.
+        #ifdef LGR_GLES_FLIP_SAMPLE_Y
+            displacement.y = -displacement.y;
+        #endif
+    }
 
     // ── Concave horizontal pinch ──────────────────────────────────────────────
     // iOS 26 indicator pills make the bar content behind the left/right edges
@@ -591,7 +603,7 @@ void main() {
     // 0.015 UV on a 390pt screen ≈ 6pt logical pixels — subtle but visible.
     //
     // ── iOS 26 Concave Lens Pinch ─────────────────────────────────────────────
-    if (uRefractionEnabled > 0.5 && uPinchStrength > 0.001) {
+    if (refractionAreaGate > 0.0 && uPinchStrength > 0.001) {
         // We cannot use normalXY because it is 0.0 in the flat interior of the pill,
         // which prevents the background from being pinched at all.
         // We also cannot use a circular distance field, because a circle mapped to a
@@ -632,7 +644,8 @@ void main() {
         // Multiplying by geometryData.a (which is 0 at the boundary and 1 by 2 px
         // inside) ramps the shift smoothly from 0 → full pinch over the same AA
         // zone as the pill alpha, eliminating the hard UV seam.
-        pinchShift *= geometryData.a;
+        // 中文说明：分界带同时衰减 pinch，避免位移在 20% 边界突然截断。
+        pinchShift *= geometryData.a * refractionAreaGate;
 
         screenUV += pinchShift;
         
@@ -655,9 +668,10 @@ void main() {
     // 中文说明：色散是折射采样的一部分。此处使用局部有效值，不覆盖 uniform
     // 中的艺术配置，开关恢复后原有色散强度会完整返回。
     float effectiveChromaticAberration =
-        uChromaticAberration * uRefractionEnabled;
-    if (dot(normalXY, normalXY) < 1e-4) {
-        // Flat interior — zero displacement, sample directly.
+        uChromaticAberration * refractionAreaGate;
+    if (refractionAreaGate <= 0.0 || normalMagnitudeSquared < 1e-4) {
+        // 中文说明：受限区域外和平坦内部都只做一次原坐标双线性采样；前者
+        // 是顶部限制的主要性能收益，仍为全表面材质合成提供真实背景颜色。
         refractColor = textureBilinear(screenUV, physTexSize, invTexSize);
     } else if (effectiveChromaticAberration < 0.01) {
         vec2 refractedUV = screenUV + displacement * invTexSize;

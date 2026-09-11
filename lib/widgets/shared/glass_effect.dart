@@ -1205,5 +1205,9 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     // Slot 36: 背景折射总开关。只交给 Shader 局部屏蔽 edge bend、pinch
     // 与色散，indicator 的交互形变和全部光照通道仍按原设置执行。
     _shader.setFloat(index++, _settings.refractionEnabled ? 1.0 : 0.0);
+
+    // Slot 37: 顶部折射限制。Shader 用 indicator 自身局部高度计算区域，
+    // 因此拖动、缩放和 jelly 形变不会改变“顶部约 20%”的设计语义。
+    _shader.setFloat(index++, _settings.topRefractionOnly ? 1.0 : 0.0);
   }
 }

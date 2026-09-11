@@ -9,7 +9,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: e2f2eaaa
+  // POIESIS_EDGE_TREATMENT_ADLER32: eed60717
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -55,6 +55,7 @@ uniform vec4 uData7; // 28..31 (baseAlphaMultiplier, edgeAlphaMultiplier, rimThi
 // 34:  uPinchStrength — animated concave lens pinch [0..1]
 // 35:  uVisibility — glass fade, kept separate from transparent tint colours
 // 36:  uRefractionEnabled — background refraction/dispersion sampling gate
+// 37:  uTopRefractionOnly — limit refraction to the local top 20% region
 
 uniform sampler2D uTexture;         // Captured background image
 
@@ -80,6 +81,10 @@ uniform float uVisibility;
 // 36: 中文说明：只关闭背景采样坐标的 edge bend、pinch 与 RGB 色散；
 // indicator 的形状动画、材质 alpha、光照、Fresnel 和双层边仍正常渲染。
 uniform float uRefractionEnabled;
+
+// 37: 中文说明：只限制背景位移、pinch 与色散；indicator 的形状动画、
+// 材质 alpha、光照、Fresnel 和双层边仍覆盖整个组件。
+uniform float uTopRefractionOnly;
 
 out vec4 fragColor;
 
@@ -294,6 +299,13 @@ void main() {
   
   float distFromEdge = abs(dist);
   float rimDistance = max(-dist, 0.0);
+  // 中文说明：使用 indicator 自身的纵向局部比例，确保跟随移动、拉伸和缩放；
+  // 16%～20% 的共享平滑带避免下方原坐标采样与顶部折射形成硬接缝。
+  float refractionAreaGate = getRefractionAreaGate(
+    localLogical.y / max(uSize.y, 1.0),
+    uRefractionEnabled,
+    uTopRefractionOnly
+  );
 
   // 中文说明：双层边的真实覆盖面积已经由上方八点重建完成。中心距离只保留
   // 给折射、Fresnel 与白色高光避让，避免改变用户已经确认的玻璃光学观感。
@@ -328,7 +340,7 @@ void main() {
   vec2 edgeOffsetLogical = surfaceNormal * edgeInfluence * bendStrength * uSize.y * 0.35;
   // 中文说明：不要通过归零 thickness 模拟关闭折射，因为 thickness 还控制
   // rim 深度；这里只归零将要施加到背景纹理坐标上的位移。
-  edgeOffsetLogical *= uRefractionEnabled;
+  edgeOffsetLogical *= refractionAreaGate;
   // Standard 只使用 Dart 显式绑定的纹理；Premium 的实时采样与坐标变换由
   // liquid_glass_final_render.frag 和官方 LiquidGlassLayer 统一负责。
   #ifdef LGR_GLES_FLIP_SAMPLE_Y
@@ -341,7 +353,7 @@ void main() {
   // 中文说明：直接在解析式 SDF 上计算凹透镜 pinch，不再依赖几何 matte。
   // L4 superellipse 让宽胶囊的上下边保持平直，mask 把偏移在 AA 边缘羽化为
   // 零，避免玻璃内外背景坐标突然跳变。该公式与完整 Premium Shader 同源。
-  if (uRefractionEnabled > 0.5 && uPinchStrength > 0.001) {
+  if (refractionAreaGate > 0.0 && uPinchStrength > 0.001) {
     vec2 geometryUv = localLogical / uSize;
     vec2 centered = geometryUv - vec2(0.5);
     vec2 absCentered = abs(centered) * 2.0;
@@ -349,7 +361,12 @@ void main() {
     float y2 = absCentered.y * absCentered.y;
     float squircleDist = sqrt(sqrt(x2 * x2 + y2 * y2));
     float pinchRamp = smoothstep(0.0, 1.0, squircleDist);
-    vec2 pinchShift = centered * pinchRamp * uPinchStrength * 0.025 * mask;
+    vec2 pinchShift = centered
+        * pinchRamp
+        * uPinchStrength
+        * 0.025
+        * mask
+        * refractionAreaGate;
     refractedUv += pinchShift;
   }
   
@@ -362,7 +379,7 @@ void main() {
   // TWEAK: (0.12) - subtle chromatic shift for "Apple style" refraction
   // 中文说明：色散和折射使用同一个总开关，但不修改调用者保存的色散强度。
   float effectiveChromaticAberration =
-      uChromaticAberration * uRefractionEnabled;
+      uChromaticAberration * refractionAreaGate;
   vec2 distort = surfaceNormal * edgeInfluence * effectiveChromaticAberration;
   vec2 chromaticShift = distort * 0.12; 
   

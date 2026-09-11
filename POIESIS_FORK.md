@@ -135,7 +135,8 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
     变换追踪修复和 PlatformView 透传模式；其中 PlatformView 的 float uniform
     固定在 slot 44，避开 Poiesis 解析几何占用的 slots 32–43。普通绘制与捕获
     绘制都会显式写入该值，避免复用 FragmentShader 时继承上一帧状态。
-11. `LiquidGlassSettings.refractionEnabled` 提供默认开启的独立折射开关：
+11. `LiquidGlassSettings.refractionEnabled` 与 `topRefractionOnly` 提供独立的
+    折射总开关和区域性能策略：
     - `false` 只把 Premium、Standard 与交互指示器三条 Shader 路径的背景
       法线位移、RGB 色散和 pinch 采样偏移归零；blur、tint、饱和度、光照、
       Fresnel、边缘吸收、白化、形状与交互几何保持原样；
@@ -143,7 +144,18 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
     - Premium 使用 slot 45，普通 backdrop 与显式 capture 都逐次写入；Standard
       轻量 Shader 使用 slot 35，交互指示器使用 slot 36；
     - `copyWith`、`copyWithPinch`、`lerp`、`GlassThemeSettings`、indicator 默认
-      配方合并与 grouped elevation 设置重建都传递该值，避免组件交互后回退为开启。
+      配方合并与 grouped elevation 设置重建都传递该值，避免组件交互后回退为开启；
+    - `topRefractionOnly` 默认关闭；开启后按每个玻璃组件自身的本地高度计算
+      区域，顶部 `0%～16%` 保持完整折射，`16%～20%` 平滑衰减，`20%` 以下
+      关闭法线位移、RGB 色散与 pinch，但继续以原坐标读取一次背景供完整材质
+      合成使用；旋转、jelly 缩放、捕获模式和 GLES 纹理翻转不会改变顶部语义；
+    - 三条 Shader 共用 `edge_treatment.glsl` 的区域门控函数；区域外 Premium
+      同时跳过 `refract`、高度解码和相关除法。开启色散时，Standard/indicator
+      的背景读取由三次降为一次，Premium 的三组手工双线性读取降为一组；
+    - 区域开关分别使用 Premium slot 46、Standard slot 36 与交互指示器
+      slot 37，所有复用 Shader 的宿主路径都逐次覆盖，避免跨组件状态泄漏；
+    - `topRefractionOnly` 与总开关一样穿过设置复制、主题、indicator 配方和
+      grouped elevation 重建；`refractionEnabled: false` 始终优先关闭全部区域。
 12. 玻璃按钮（`GlassButton`、`GlassIconButton` 及按钮组外层壳体）引入专用的外部反向镂空投影：
     - 为满足轻质感悬浮需求并彻底解决半透明玻璃底色被下方阴影污染的问题，新增 `enableOuterShadow`（默认开启）与 `outerShadow` 可配置项；
     - 采用 `GlassButtonOuterShadowPainter` 配合 `PathFillType.evenOdd` 规则构建反向剪裁路径，在绘制外部模糊阴影时，将按钮几何形状内部 100% 裁切镂空，绝不渗透至半透明玻璃本体内部，保持玻璃通透澄澈；
@@ -155,7 +167,8 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
 
 - 解析式 Premium 不依赖背景快照；显式选择 minimal、系统降低透明度或
   PlatformView 安全路径时仍遵循既有无折射回退，`blur: 0` 本身不代表禁用折射。
-  需要保留材质 Shader 但关闭背景折射时使用 `refractionEnabled: false`。
+  需要保留材质 Shader 但关闭背景折射时使用 `refractionEnabled: false`；需要
+  保留顶部折射同时降低大面积采样时使用 `topRefractionOnly: true`。
 - superellipse、椭圆、上下非对称圆角以及多形状 metaball 继续使用官方几何
   texture 管线，不用近似轮廓换取性能。
 - 透视、退化或不可逆变换不会强行进入解析式或二维逆仿射分支，自动回退官方
