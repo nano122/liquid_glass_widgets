@@ -36,7 +36,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: eed60717
+// POIESIS_EDGE_TREATMENT_ADLER32: b89247de
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
@@ -128,6 +128,10 @@ uniform float uTopRefractionOnly;
 
 // 中文说明：仅显式快照启用硬件双线性和黑色模态遮罩；实时 backdrop 每帧写零。
 uniform vec2 uCaptureConfig; // x: capture enabled, y: barrier opacity
+
+// Slot 49：与通用最终 Shader 保持完全一致的 uniform 契约。Windows host
+// 固定写 1.0，因此只保留原有 SDR 高光，不改变平台兼容变体的视觉输出。
+uniform float uHighlightHeadroom;
 
 // uThickness directly and is already DPR-independent).
 // uniform float uRefractScale; // Removed in favor of scaling uThickness
@@ -914,7 +918,10 @@ void main() {
         // 防止后绘制的高光重新把灰黑边覆盖成白色描边。
         brightness *= innerHighlightGate;
 
-        vec3 highlightColor = getHighlightColor(refractColor.rgb, 1.0);
+        vec3 highlightColor = getHighlightColor(
+            refractColor.rgb,
+            uHighlightHeadroom
+        );
         finalColor.rgb = mix(finalColor.rgb, highlightColor, brightness);
     }
 
@@ -956,7 +963,11 @@ void main() {
     // 终止暗边的内侧，避免最外轮廓在最终合成阶段重新发亮。
     float fresnel = (rimBase * 0.12 * uEdgeConfig.y + ring * 0.45)
                   * innerHighlightGate;
-    finalColor.rgb = clamp(finalColor.rgb + vec3(fresnel), 0.0, 1.0);
+    finalColor.rgb = clamp(
+        finalColor.rgb + vec3(fresnel),
+        vec3(0.0),
+        vec3(uHighlightHeadroom)
+    );
 
     // 中文说明：复用已经去预乘的折射背景，让顶部/底部肩部按背景逐通道
     // 最多消耗剩余亮度空间的 35% / 20%；峰值核心才会把增益提升到 1.0，并用
@@ -967,7 +978,8 @@ void main() {
         finalColor.rgb,
         refractColor.rgb,
         verticalAreaHighlightExposureLift,
-        1.0
+        1.0,
+        uHighlightHeadroom
     );
 
     // 中文说明：最后先铺完整浅灰环，再叠加只由 abs(localRimN.x) 控制的

@@ -9,6 +9,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../../src/renderer/internal/transform_tracking_repaint_boundary_mixin.dart';
+import '../../src/renderer/internal/glass_highlight_headroom.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 import '../../src/renderer/glass_backdrop_kernel.dart';
 import '../../theme/glass_theme.dart';
@@ -1080,5 +1081,9 @@ class _RenderLightweightGlass extends RenderProxyBox
     // 36: uTopRefractionOnly — 开启后只有组件本地顶部约 20% 使用折射、
     // pinch 与多通道色散，下方区域仍保留一次原坐标采样完成材质合成。
     shader.setFloat(index++, _settings.topRefractionOnly ? 1.0 : 0.0);
+
+    // 37: uHighlightHeadroom — iOS 原生 EDR surface 使用 1.22；其他平台
+    // 继续写 1.0。该值只参与现有高光合成，不改变背景折射和玻璃底色。
+    shader.setFloat(index++, glassHighlightHeadroom);
   }
 }

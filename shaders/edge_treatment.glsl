@@ -454,15 +454,17 @@ vec3 applyVerticalAreaHighlight(
     vec3 color,
     vec3 backdropColor,
     float highlightExposureLift,
-    float colorAlpha
+    float colorAlpha,
+    float highlightHeadroomMultiplier
 ) {
     // 中文说明：背景色不再作为固定加法，而是作为剩余亮度空间的逐通道权重。
     // 峰值平台可把几何曝光提高到 1.0；U 型亮度门控让暗背景高光降至 0.50 峰值以消除过亮，
     // 中间背景压低到 25%，接近白色时再恢复可见高光。纯黑背景仍因逐通道权重
-    // 为零而不会凭空生白，彩色背景也会保留自身色相与纹理。headroom 已位于
-    // 当前 alpha 的合法范围，因此预乘分支无需再次乘 alpha，也不会在透明边缘漏色。
+    // 为零而不会凭空生白，彩色背景也会保留自身色相与纹理。iOS EDR 只把
+    // 原有白点扩到 1.22；几何遮罩、背景门控和曝光比例全部保持不变。
+    // 预乘分支先用自身 alpha 缩放 EDR 白点，不会在透明边缘漏色。
     float safeColorAlpha = clamp(colorAlpha, 0.0, 1.0);
-    vec3 whitePoint = vec3(safeColorAlpha);
+    vec3 whitePoint = vec3(safeColorAlpha * highlightHeadroomMultiplier);
     vec3 highlightHeadroom = max(whitePoint - color, vec3(0.0));
     vec3 backdropWeight = clamp(backdropColor, 0.0, 1.0);
     float backdropExposureGate = getVerticalAreaHighlightBackdropGate(

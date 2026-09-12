@@ -9,7 +9,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: eed60717
+  // POIESIS_EDGE_TREATMENT_ADLER32: b89247de
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -56,6 +56,7 @@ uniform vec4 uData7; // 28..31 (baseAlphaMultiplier, edgeAlphaMultiplier, rimThi
 // 35:  uVisibility — glass fade, kept separate from transparent tint colours
 // 36:  uRefractionEnabled — background refraction/dispersion sampling gate
 // 37:  uTopRefractionOnly — limit refraction to the local top 20% region
+// 38:  uHighlightHeadroom — iOS EDR highlight white point; SDR remains 1.0
 
 uniform sampler2D uTexture;         // Captured background image
 
@@ -85,6 +86,10 @@ uniform float uRefractionEnabled;
 // 37: 中文说明：只限制背景位移、pinch 与色散；indicator 的形状动画、
 // 材质 alpha、光照、Fresnel 和双层边仍覆盖整个组件。
 uniform float uTopRefractionOnly;
+
+// 38: 中文说明：只扩展现有方向光、Fresnel 和上下区域高光的白点。
+// 玻璃体、背景折射、透明度与灰黑结构边不读取该值。
+uniform float uHighlightHeadroom;
 
 out vec4 fragColor;
 
@@ -551,7 +556,8 @@ void main() {
     finalColor,
     bg,
     verticalAreaHighlightExposureLift,
-    1.0
+    1.0,
+    uHighlightHeadroom
   );
 
   // 中文说明：最后先铺完整浅灰环，再叠加由 abs(surfaceNormal.x) 控制的
@@ -563,8 +569,9 @@ void main() {
     uEdgeAbsorption
   );
 
-  // Clamp to prevent over-bright pixels
-  finalColor = min(finalColor, vec3(1.2));
+  // 中文说明：沿用旧版整套 indicator 高光，只把最终白点从固定 1.2
+  // 改为平台 uniform；iOS 为 1.22，其他 surface 仍在 SDR 1.0 收口。
+  finalColor = clamp(finalColor, vec3(0.0), vec3(uHighlightHeadroom));
   
   // ==========================================================================
   // ALPHA / TRANSPARENCY

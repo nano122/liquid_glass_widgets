@@ -314,7 +314,7 @@ GlassThemeVariant(
 
 | Platform | Renderer | Notes |
 |---|---|---|
-| iOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`) |
+| iOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`), Poiesis EDR highlights up to `1.22` |
 | Android (Vulkan) | Impeller (Vulkan) | Full 16-shape shader pipeline, chromatic aberration, async preloaded bytecode — matches iOS Metal |
 | Android (GLES fallback) | Impeller (GLES) | GLES-optimized 8-shape AST to prevent runtime driver compile stalls; zero ANR |
 | macOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`) |
@@ -322,7 +322,22 @@ GlassThemeVariant(
 | Windows | Impeller (ANGLE) / Skia | Lightweight 2D shader default; instant Frame 1 launch; GLES-optimized AST |
 | Linux | Impeller / Skia | Lightweight 2D shader default |
 
-Platform detection is automatic — no configuration required. `LiquidGlassWidgets.initialize()` loads shader bytecode asynchronously via non-blocking I/O, ensuring apps open instantly on Frame 1 across all platforms without splash-screen stalls or raster thread lockups.
+Rendering-path detection is automatic. `LiquidGlassWidgets.initialize()` loads shader bytecode asynchronously via non-blocking I/O, ensuring apps open instantly on Frame 1 across all platforms without splash-screen stalls or raster thread lockups. The Poiesis iOS EDR extension has the one host configuration requirement described below.
+
+### iOS EDR highlights (Poiesis fork)
+
+The Poiesis fork preserves the existing specular, Fresnel, capsule, and crescent
+highlight masks, but raises their final white point from SDR `1.0` to `1.22` on
+native iOS. Glass body colour, refraction, alpha, and the light/dark structural
+rims remain in their existing SDR range; Web and every non-iOS platform receive
+`1.0`, so their output stays unchanged.
+
+The host iOS app must explicitly enable both sides of the EDR pipeline:
+`FLTEnableWideGamut=true` creates Flutter's `BGRA10_XR` surface, and the Flutter
+view's `CAMetalLayer.wantsExtendedDynamicRangeContent` must be set to `true` once
+the scene is active. Without either setting, values above `1.0` are clipped or
+composited as SDR. The fixed `1.22` peak intentionally leaves margin below the
+approximately `1.25098` channel limit of Flutter's current iOS surface.
 
 ### Windows Impeller & Android Hardware Notes
 

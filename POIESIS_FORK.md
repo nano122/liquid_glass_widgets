@@ -103,14 +103,23 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      hairline rim 向内渐入，不再覆盖最外轮廓；
    - 共享描边函数不再把 `edgeAbsorption` 当作显示 gate；固定低透明度保证关闭
      吸收后仍有可见但不发亮的玻璃轮廓；
-   - Flutter 增量 Shader 构建不会追踪本地 `#include` 依赖，三个入口文件因此
+   - Flutter 增量 Shader 构建不会追踪本地 `#include` 依赖，三个通用入口与
+     Windows 最终合成兼容变体因此
      各自保存 `edge_treatment.glsl` 规范化源码的 Adler-32 校验值。修改共享
-     边缘算法时必须同步三个标记，既让入口内容变化以强制重编译，也由回归测试
+     边缘算法时必须同步四个标记，既让入口内容变化以强制重编译，也由回归测试
      阻止旧 Shader 二进制被静默复用；
+   - 原生 iOS 的镜面反射、Fresnel 与上下区域高光通过统一
+     `uHighlightHeadroom=1.22` 输出 EDR 超白值；胶囊/月牙几何、背景 U 型门控、
+     各层相对强度和合成顺序全部复用原实现。预乘路径以 `alpha * 1.22` 为合法
+     白点，防止透明轮廓漏光；灰白/冷黑结构边、玻璃体、折射与透明度仍留在
+     SDR 范围。Web 和非 iOS 原生平台逐帧写 `1.0`，视觉保持不变；Premium
+     实时与 capture 使用 slot 49，Standard 使用 slot 37，交互指示器使用
+     slot 38，复用的 FragmentShader 不会继承上一 surface 的状态；
    - 解析式路径只在轮廓窄带增加八次 cache-free SDF ALU；Premium 多形状仅在
      同一窄带增加八个 cache-hot geometry 样本。上下区域高光只增加局部坐标
      `smoothstep`、背景逐通道 headroom 权重与颜色上限计算；背景折射、色散及 backdrop
-     纹理读取数量不变，也不新增 uniform、`BackdropFilter`、离屏纹理或渲染 Pass。
+     纹理读取数量不变。EDR 只新增一个 float uniform，不新增 `BackdropFilter`、
+     离屏纹理或渲染 Pass。
 8. Premium 多形状与复杂轮廓的 geometry texture 保持在渲染层本地坐标，并
    使用“屏幕物理像素 → 渲染层本地逻辑像素”的完整 2x3 逆仿射采样：
    - `uGeometryOffset/uGeometrySize` 保存纹理实际录制边界，不再保存旋转后丢失

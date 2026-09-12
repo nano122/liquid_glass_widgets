@@ -10,7 +10,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: eed60717
+  // POIESIS_EDGE_TREATMENT_ADLER32: b89247de
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -50,6 +50,9 @@ uniform float uRefractionEnabled;
 // 36: uTopRefractionOnly — 开启时仅顶部约 20% 执行折射、pinch 与 RGB 色散；
 // 下方仍以原坐标读取背景，保留完整材质与光照合成。
 uniform float uTopRefractionOnly;
+// 37: uHighlightHeadroom — iOS 原生 EDR 为 1.22，其他 surface 为 1.0。
+// 仅扩展现有高光白点，不改变玻璃体、折射采样或结构边颜色。
+uniform float uHighlightHeadroom;
 
 uniform sampler2D uBackground; // The captured background texture
 // Slot 22 (uData5.z): specular sharpness level — passed as float 0.0/1.0/2.0, cast to int.
@@ -544,7 +547,8 @@ void main() {
         pmRgb2,
         vec3(uBackdropLuma),
         verticalAreaHighlightExposureLift,
-        outA2
+        outA2,
+        uHighlightHeadroom
       );
 
       // 中文说明：无有效背景的回退分支同样叠加完整浅边和左右深边，避免
@@ -555,7 +559,14 @@ void main() {
         lateralDarkRimMask,
         uEdgeAbsorption
       );
-      fragColor = vec4(clamp(pmRgb2, 0.0, 1.0) * mask, outA2 * mask);
+      fragColor = vec4(
+        clamp(
+          pmRgb2,
+          vec3(0.0),
+          vec3(outA2 * uHighlightHeadroom)
+        ) * mask,
+        outA2 * mask
+      );
     } else {
       // Normal PATH A — background texture is valid.
       //
@@ -617,7 +628,11 @@ void main() {
       float glowMask = step(0.01, uGlowIntensity);
       finalColor += vec3(uGlowIntensity * 0.3 * glowMask);
 
-      finalColor = clamp(finalColor + vec3(fresnel), 0.0, 1.0);
+      finalColor = clamp(
+        finalColor + vec3(fresnel),
+        vec3(0.0),
+        vec3(uHighlightHeadroom)
+      );
 
       // [1] Hemisphere lens profile + [2] light-modulated absorption (PATH A normal)
       float r_normA = clamp(distFromEdge / edgeZone, 0.0, 1.0);
@@ -635,7 +650,8 @@ void main() {
         finalColor,
         bgRgb,
         verticalAreaHighlightExposureLift,
-        1.0
+        1.0,
+        uHighlightHeadroom
       );
 
       // 中文说明：必须晚于上面的 rim 与 fresnel 合成，才能让完整浅灰环
@@ -709,7 +725,8 @@ void main() {
       pmRgb,
       vec3(uBackdropLuma),
       verticalAreaHighlightExposureLift,
-      pmA
+      pmA,
+      uHighlightHeadroom
     );
 
     // 中文说明：Standard 常用的无背景纹理分支也使用相同双层边缘函数，
@@ -721,7 +738,14 @@ void main() {
       uEdgeAbsorption
     );
 
-    fragColor = vec4(clamp(pmRgb, 0.0, 1.0) * mask, pmA * mask);
+    fragColor = vec4(
+      clamp(
+        pmRgb,
+        vec3(0.0),
+        vec3(pmA * uHighlightHeadroom)
+      ) * mask,
+      pmA * mask
+    );
   }
 }
 
