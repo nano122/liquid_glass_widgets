@@ -173,6 +173,10 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
     - 默认投影配置在 `GlassDefaults` 集中收敛（12px 模糊，(0, 2) 偏移，亮色采用带微蓝冷调补偿的冷灰阴影 `Color(0x0E0E1C44)`，暗色采用 10% 黑色 `Color(0x1A000000)`），使暖底叠加后羽化带实测呈现 224, 224, 229（高出约 5 个点）的纯净冷调；
     - 阴影与玻璃按钮主体一同置于 `LiquidStretch` 内部，按压膨胀（1.04x）或拉伸时阴影同步放大，交互自然逼真；
     - `GlassButtonStyle.transparent` 样式自动跳过外部阴影，避免复合按钮组内部子项产生多重阴影叠压。
+13. `GlassTabBar.bottom` 的静止视觉与独立玻璃输入胶囊对齐：
+    - 底板从圆角矩形改为连续超椭圆，使顶部高光、肩部过渡与两端曲率使用同一套几何语义；
+    - 移除底板 `AdaptiveGlass.grouped` 外层无收益的 `RepaintBoundary`，让底板直接注册到共享玻璃层，减少无必要的合成隔离；
+    - `AnimatedGlassIndicator.restingGlassVisibility` 提供默认关闭的静止玻璃下限，底部导航使用 `0.18`，因此选中胶囊静止时保留轻微折射与材质高光，其他组件保持原行为。
 
 ## 回退边界
 

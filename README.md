@@ -334,6 +334,11 @@ uses 70% of the top SDR energy and peaks near `1.11`. Quintic transitions keep
 these layers continuous. Refraction, alpha, and structural rims are unchanged;
 Web and every non-iOS platform receive `1.0`, so their output stays SDR.
 
+`GlassTabBar.bottom` uses a superellipse base surface and keeps 18% of the
+selected indicator's glass visibility at rest. The base is registered directly
+in its shared glass layer rather than behind an unnecessary repaint boundary,
+keeping the rendering hierarchy direct while the bar is idle.
+
 The host iOS app must explicitly enable both sides of the EDR pipeline:
 `FLTEnableWideGamut=true` creates Flutter's `BGRA10_XR` surface, and the Flutter
 view's `CAMetalLayer.wantsExtendedDynamicRangeContent` must be set to `true` once
