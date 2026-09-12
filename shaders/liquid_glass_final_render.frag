@@ -34,7 +34,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: b89247de
+// POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
@@ -129,7 +129,7 @@ uniform float uTopRefractionOnly;
 uniform vec2 uCaptureConfig; // x: capture enabled, y: barrier opacity
 
 // Slot 49：最终高光白点。iOS 原生 EDR 写 1.22，其他 surface 写 1.0；
-// 只供镜面反射、Fresnel 与上下区域高光使用，玻璃体和结构边保持 SDR。
+// 共享函数从该范围分配主体柔光、宽肩部和极窄峰值，结构边仍保持 SDR。
 uniform float uHighlightHeadroom;
 
 // uThickness directly and is already DPR-independent).
@@ -517,7 +517,9 @@ void main() {
 
     // 中文说明：自适应高光根据长宽比自动在胶囊平直高光与圆形月牙高光之间平滑融合；
     // 颜色会在最终合成时复用折射背景样本，不增加纹理读取、uniform 或渲染 Pass。
-    float verticalAreaHighlightExposureLift = getAdaptiveAreaHighlightExposureLift(
+    // 中文说明：顶、底反射必须保留为独立通道，最终合成才能让底部始终弱于
+    // 顶部，并只在顶部极窄核心开放完整 1.22 峰值。
+    vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
         geometryUV,
         glassLogicalSize
     );
@@ -943,7 +945,7 @@ void main() {
 
         vec3 highlightColor = getHighlightColor(
             refractColor.rgb,
-            uHighlightHeadroom
+            getGlassHighlightShoulderWhitePoint(uHighlightHeadroom)
         );
         finalColor.rgb = mix(finalColor.rgb, highlightColor, brightness);
     }
@@ -989,18 +991,16 @@ void main() {
     finalColor.rgb = clamp(
         finalColor.rgb + vec3(fresnel),
         vec3(0.0),
-        vec3(uHighlightHeadroom)
+        vec3(getGlassHighlightShoulderWhitePoint(uHighlightHeadroom))
     );
 
-    // 中文说明：复用已经去预乘的折射背景，让顶部/底部肩部按背景逐通道
-    // 最多消耗剩余亮度空间的 35% / 20%；峰值核心才会把增益提升到 1.0，并用
-    // 宽 smoothstep 保留接近旧版 2dp 的可见范围，
-    // 因而白底端点更白而不形成死白平台，背景纹理与色相仍会保留。区域高光
-    // 先补亮内部，随后灰黑双层边再覆盖最外轮廓。
+    // 中文说明：共享四层分配先给整个玻璃约 2.64% 柔光，再将顶部宽肩部
+    // 控制在约 1.08，只有极窄核心到 1.22；底部基础反射为顶部 70%，峰值
+    // 约 1.11。五次曲线保证各层连续，背景纹理与色相仍会保留。
     finalColor.rgb = applyVerticalAreaHighlight(
         finalColor.rgb,
         refractColor.rgb,
-        verticalAreaHighlightExposureLift,
+        verticalAreaHighlightExposureProfile,
         1.0,
         uHighlightHeadroom
     );

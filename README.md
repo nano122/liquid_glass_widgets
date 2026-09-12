@@ -326,11 +326,13 @@ Rendering-path detection is automatic. `LiquidGlassWidgets.initialize()` loads s
 
 ### iOS EDR highlights (Poiesis fork)
 
-The Poiesis fork preserves the existing specular, Fresnel, capsule, and crescent
-highlight masks, but raises their final white point from SDR `1.0` to `1.22` on
-native iOS. Glass body colour, refraction, alpha, and the light/dark structural
-rims remain in their existing SDR range; Web and every non-iOS platform receive
-`1.0`, so their output stays unchanged.
+The Poiesis fork distributes native-iOS EDR energy across the whole material
+instead of sending every highlight directly to `1.22`. The glass body receives
+a subtle `~2.64%` multiplicative lift, broad specular/Fresnel shoulders stop at
+about `1.08`, and only a sub-1dp top core reaches `1.22`. The bottom reflection
+uses 70% of the top SDR energy and peaks near `1.11`. Quintic transitions keep
+these layers continuous. Refraction, alpha, and structural rims are unchanged;
+Web and every non-iOS platform receive `1.0`, so their output stays SDR.
 
 The host iOS app must explicitly enable both sides of the EDR pipeline:
 `FLTEnableWideGamut=true` creates Flutter's `BGRA10_XR` surface, and the Flutter

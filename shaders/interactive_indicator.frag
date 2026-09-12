@@ -9,7 +9,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: b89247de
+  // POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -87,8 +87,8 @@ uniform float uRefractionEnabled;
 // 材质 alpha、光照、Fresnel 和双层边仍覆盖整个组件。
 uniform float uTopRefractionOnly;
 
-// 38: 中文说明：只扩展现有方向光、Fresnel 和上下区域高光的白点。
-// 玻璃体、背景折射、透明度与灰黑结构边不读取该值。
+// 38: 中文说明：用于分配主体柔光、方向光肩部和上下区域峰值。
+// 背景折射、透明度与灰黑结构边不读取该值。
 uniform float uHighlightHeadroom;
 
 out vec4 fragColor;
@@ -205,7 +205,9 @@ void main() {
     0.0,
     1.0
   );
-  float verticalAreaHighlightExposureLift = getAdaptiveAreaHighlightExposureLift(
+  // 中文说明：indicator 与普通玻璃使用相同的顶强底弱双通道曲线，尺寸或
+  // jelly 形变时仍连续插值，不会因为交互路径不同而出现亮度跳变。
+  vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
     localUV,
     uSize
   );
@@ -548,14 +550,12 @@ void main() {
   float absorption = 1.0 - lensThickness * modulatedAbsorption;
   finalColor *= max(0.0, absorption);
 
-  // 中文说明：复用当前折射背景 bg，肩部按背景逐通道最多消耗剩余亮度空间的
-  // 35% / 20%；共享函数只在峰值核心把增益提升到 1.0，并用宽 smoothstep 保留
-  // 接近旧版 2dp 的可见范围。无纹理模式自然使用
-  // 既有底色，白底端点更白但不会让整段高光失去过渡。
+  // 中文说明：共享函数以当前折射背景 bg 分配主体柔光、顶部肩部和极窄核心；
+  // 底部基础反射与峰值均更弱。无纹理模式自然使用既有底色，过渡保持连续。
   finalColor = applyVerticalAreaHighlight(
     finalColor,
     bg,
-    verticalAreaHighlightExposureLift,
+    verticalAreaHighlightExposureProfile,
     1.0,
     uHighlightHeadroom
   );
@@ -569,8 +569,8 @@ void main() {
     uEdgeAbsorption
   );
 
-  // 中文说明：沿用旧版整套 indicator 高光，只把最终白点从固定 1.2
-  // 改为平台 uniform；iOS 为 1.22，其他 surface 仍在 SDR 1.0 收口。
+  // 中文说明：平台 uniform 仍是最终安全上限；真正达到 1.22 的只有共享函数
+  // 生成的顶部极窄核心，其他高光已在进入该函数时收束到肩部范围。
   finalColor = clamp(finalColor, vec3(0.0), vec3(uHighlightHeadroom));
   
   // ==========================================================================

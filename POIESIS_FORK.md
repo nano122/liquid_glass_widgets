@@ -108,11 +108,13 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      各自保存 `edge_treatment.glsl` 规范化源码的 Adler-32 校验值。修改共享
      边缘算法时必须同步四个标记，既让入口内容变化以强制重编译，也由回归测试
      阻止旧 Shader 二进制被静默复用；
-   - 原生 iOS 的镜面反射、Fresnel 与上下区域高光通过统一
-     `uHighlightHeadroom=1.22` 输出 EDR 超白值；胶囊/月牙几何、背景 U 型门控、
-     各层相对强度和合成顺序全部复用原实现。预乘路径以 `alpha * 1.22` 为合法
-     白点，防止透明轮廓漏光；灰白/冷黑结构边、玻璃体、折射与透明度仍留在
-     SDR 范围。Web 和非 iOS 原生平台逐帧写 `1.0`，视觉保持不变；Premium
+   - 原生 iOS 通过统一 `uHighlightHeadroom=1.22` 将 EDR 能量拆成四层：玻璃
+     主体使用 12% 可用 headroom（约 `1.0264`），镜面、Fresnel 与顶部宽肩部
+     使用 36%（约 `1.079`），仅顶部不足约 1dp 的核心使用完整 `1.22`；底部
+     SDR 反射为顶部 70%，EDR 峰值使用 50% headroom（约 `1.11`）。层间使用
+     五次 smootherstep，端点一、二阶导数均为零；预乘路径继续以自身 alpha
+     缩放白点，灰白/冷黑结构边、折射与透明度不变。Web 和非 iOS 原生平台
+     逐帧写 `1.0`，视觉保持不变；Premium
      实时与 capture 使用 slot 49，Standard 使用 slot 37，交互指示器使用
      slot 38，复用的 FragmentShader 不会继承上一 surface 的状态；
    - 解析式路径只在轮廓窄带增加八次 cache-free SDF ALU；Premium 多形状仅在

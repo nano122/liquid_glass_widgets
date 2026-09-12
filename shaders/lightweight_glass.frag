@@ -10,7 +10,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: b89247de
+  // POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -51,7 +51,7 @@ uniform float uRefractionEnabled;
 // 下方仍以原坐标读取背景，保留完整材质与光照合成。
 uniform float uTopRefractionOnly;
 // 37: uHighlightHeadroom — iOS 原生 EDR 为 1.22，其他 surface 为 1.0。
-// 仅扩展现有高光白点，不改变玻璃体、折射采样或结构边颜色。
+// 共享函数会分配主体柔光、宽肩部和极窄峰值；折射采样与结构边颜色不变。
 uniform float uHighlightHeadroom;
 
 uniform sampler2D uBackground; // The captured background texture
@@ -239,7 +239,9 @@ void main() {
     0.0,
     1.0
   );
-  float verticalAreaHighlightExposureLift = getAdaptiveAreaHighlightExposureLift(
+  // 中文说明：共享双通道遮罩保留顶部和底部各自的能量，避免先相加后无法
+  // 控制底部峰值；Standard 的三条输出分支都复用同一结果。
+  vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
     localUV,
     uSize
   );
@@ -546,7 +548,7 @@ void main() {
       pmRgb2 = applyVerticalAreaHighlight(
         pmRgb2,
         vec3(uBackdropLuma),
-        verticalAreaHighlightExposureLift,
+        verticalAreaHighlightExposureProfile,
         outA2,
         uHighlightHeadroom
       );
@@ -642,14 +644,12 @@ void main() {
       float absorptionA = 1.0 - lensThA * uEdgeAbsorption * dirScaleA;
       finalColor *= max(0.0, absorptionA);
 
-      // 中文说明：有效背景路径复用已折射的 bgRgb，肩部按背景逐通道最多消耗
-      // 剩余亮度空间的 35% / 20%；共享函数只在峰值核心把增益提升到 1.0，并用
-      // 宽 smoothstep 保留接近旧版 2dp 的可见范围，
-      // 所以白底端点更白但仍保留过渡，而且不增加纹理读取。
+      // 中文说明：有效背景路径复用已折射的 bgRgb；共享函数给主体少量柔光，
+      // 顶部以宽肩部衔接极窄峰值，底部基础与峰值都更弱，且不增加纹理读取。
       finalColor = applyVerticalAreaHighlight(
         finalColor,
         bgRgb,
-        verticalAreaHighlightExposureLift,
+        verticalAreaHighlightExposureProfile,
         1.0,
         uHighlightHeadroom
       );
@@ -724,7 +724,7 @@ void main() {
     pmRgb = applyVerticalAreaHighlight(
       pmRgb,
       vec3(uBackdropLuma),
-      verticalAreaHighlightExposureLift,
+      verticalAreaHighlightExposureProfile,
       pmA,
       uHighlightHeadroom
     );
