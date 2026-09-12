@@ -40,8 +40,11 @@ flutter:
     - shaders/lightweight_glass.frag
     - shaders/interactive_indicator.frag
     - shaders/liquid_glass_geometry_blended.frag
+    # 中文说明：原生 Windows 在运行时选择有界 AST 的几何 Pass，避免
+    # ANGLE 首次链接通用 16 形状 Shader 时阻塞首屏。
+    - shaders/liquid_glass_geometry_blended_windows.frag
     - shaders/liquid_glass_final_render.frag
-    # 中文说明：Windows 原生 Impeller/OpenGLESSDF 不编译超椭圆 mode 2，
-    # 其余 uniform 与合成逻辑必须和通用版本保持一致。
+    # 中文说明：Windows 原生 Impeller/OpenGLESSDF 使用有界采样的最终
+    # 合成；uniform 顺序仍与通用版本保持一致。
     - shaders/liquid_glass_final_render_windows.frag
     - shaders/progressive_blur.frag

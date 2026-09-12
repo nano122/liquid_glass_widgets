@@ -11,8 +11,26 @@ final String _shadersRoot =
 abstract class ShaderKeys {
   const ShaderKeys._();
 
-  static final blendedGeometry =
-      '${_shadersRoot}shaders/liquid_glass_geometry_blended.frag';
+  /// 返回当前平台应加载的几何预计算 Shader 资产。
+  ///
+  /// 中文说明：Windows Impeller/OpenGLESSDF 会在首次呈现时由 ANGLE 驱动
+  /// 链接运行时 GLSL。通用几何 Shader 的 16 形状双向展开会生成接近 1MB
+  /// 的运行时资产，因此原生 Windows 必须在 [FragmentProgram] 加载前选择
+  /// 8 形状单向融合版本；只在运行时减少实际形状数无法缩小驱动编译单元。
+  static String blendedGeometryForPlatform(
+    TargetPlatform platform, {
+    required bool isWeb,
+  }) {
+    final fileName = !isWeb && platform == TargetPlatform.windows
+        ? 'liquid_glass_geometry_blended_windows.frag'
+        : 'liquid_glass_geometry_blended.frag';
+    return '${_shadersRoot}shaders/$fileName';
+  }
+
+  static String get blendedGeometry => blendedGeometryForPlatform(
+        defaultTargetPlatform,
+        isWeb: kIsWeb,
+      );
 
   /// 当前平台是否能把超椭圆解析 SDF 编译进最终合成 Shader。
   ///

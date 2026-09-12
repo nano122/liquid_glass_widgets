@@ -319,10 +319,14 @@ GlassThemeVariant(
 | Android (GLES fallback) | Impeller (GLES) | GLES-optimized 8-shape AST to prevent runtime driver compile stalls; zero ANR |
 | macOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`) |
 | Web | CanvasKit | Lightweight 2D fragment shader |
-| Windows | Impeller (ANGLE) / Skia | Lightweight 2D shader default; instant Frame 1 launch; GLES-optimized AST |
+| Windows | Impeller (ANGLE) / Skia | Lightweight 2D shader default; forced Premium uses bounded 8-shape geometry and bounded-sampling composite |
 | Linux | Impeller / Skia | Lightweight 2D shader default |
 
-Platform detection is automatic — no configuration required. `LiquidGlassWidgets.initialize()` loads shader bytecode asynchronously via non-blocking I/O, ensuring apps open instantly on Frame 1 across all platforms without splash-screen stalls or raster thread lockups.
+Rendering-path detection is automatic. `LiquidGlassWidgets.initialize()` loads
+shader bytecode asynchronously via non-blocking I/O. Native Windows apps that
+explicitly force Premium select smaller ANGLE-safe geometry and composite
+programs before `FragmentProgram` loading; other platforms keep their existing
+rendering paths.
 
 ### Windows Impeller & Android Hardware Notes
 
@@ -332,7 +336,7 @@ On Windows (Flutter 3.47+ Impeller using ANGLE) and budget Android devices runni
 1. **Zero GPU Work Before `runApp()`:** `initialize()` executes only async disk-to-RAM I/O — no rasterization, no `toImageSync` calls — so the OS window always appears immediately on Frame 1.
 2. **First-Class Android Vulkan Support:** Flagship Android devices (Galaxy S23/S24/S25, Pixel 7/8/9, OnePlus 12) running Impeller Vulkan receive the full 16-shape unrolled geometry pipeline and async preloaded shaders, matching iOS Metal frame-for-frame.
 3. **Safe Desktop Defaults:** `GlassAdaptiveScope` statically caps Windows, Linux, and Web at `GlassQuality.standard` (crisp 2D liquid glass with real iOS 26 squircle curves, dual specular highlights, and blur) for silky-smooth 60/120fps out-of-the-box.
-4. **Optimized GLES AST:** Shaders automatically evaluate an optimized 8-shape geometry layout under GLES/ANGLE to prevent JIT compiler stalls, while Metal (iOS/macOS) and Vulkan (Android) remain on the full 16-shape path.
+4. **Bounded Windows Premium AST:** Native Windows selects an 8-shape, forward-only geometry program that computes SDF distance and gradient together. Its composite uses at most three hardware backdrop samples and reuses the centre geometry sample for edge lighting. The geometry approximation maps superellipses to the same-radius rounded-rectangle field on Windows; ellipse and rounded-rectangle primitives remain analytic. Metal and Vulkan keep the full 16-shape, bidirectional, supersampled pipeline.
 
 ## Glass Quality Modes
 
@@ -1100,5 +1104,17 @@ Flutter 3.47.x 在部分 Windows 图形栈编译该分支后整层空白，同�
 抽屉的实时 backdrop 提取，并使用硬件双线性替代每次四点手工插值。
 黑色遮罩按路由原有 barrierCurve 同步，快照在 route.completed 后释放。
 文本、图标、轮廓参数、顶部折射限制与材质高光保留；minimal、壁纸毛玻璃和
-Skia/Web 保持各自原有分流。尚未完成真机优化前后的帧耗时与截图对照，
-不能把减少纹理生成和读取次数直接等同于已测得的帧率提升。
+Skia/Web 保持各自原有分流。Windows 首帧的后续修复和实测结果见下一节。
+
+## Windows Premium 首帧优化（2026-09-12）
+
+原生 Windows 强制使用 Premium 时，会分别选择
+`liquid_glass_geometry_blended_windows.frag` 和
+`liquid_glass_final_render_windows.frag`。geometry Pass 保持现有 uniform
+槽位及 OpenGLES 的 8 形状上限，使用一次前向 smooth-union 同时计算距离与
+梯度；超椭圆在此平台采用同半径圆角矩形近似。最终 Pass 保留法线折射、RGB
+色散、tint、增白、Fresnel、边缘吸收和快照遮罩，背景最多采样三次。
+
+Poiesis Windows Debug EXE 的冷启动对照中，原 Premium 约 42 秒进入主页面；
+上述两个有界 Shader 组合约 7 秒完整显示主页面，接近相同数据下 minimal 的
+约 4.6 秒。其他平台继续加载通用 16 形状和完整边缘超采样实现。

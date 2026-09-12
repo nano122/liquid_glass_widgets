@@ -15,9 +15,31 @@ import 'package:liquid_glass_widgets/src/renderer/shaders.dart';
 const _settings = LiquidGlassSettings(blur: 0, thickness: 45);
 
 void main() {
-  test('最终合成 Shader 按原生 Windows 与其他平台分流', () {
+  test('Premium 两个 Pass 均按原生 Windows 与其他平台分流', () {
     // 中文注释：Windows Web 不使用出错的原生 OpenGLESSDF 后端，因此仍加载
-    // 通用版本；只有原生 Windows 必须选择不含 mode 2 的安全编译单元。
+    // 通用版本；原生 Windows 的 geometry 与最终合成都必须在加载前选择较小
+    // 的编译单元，避免仅隔离最终 Shader 后仍被 968KB geometry 阻塞首帧。
+    expect(
+      ShaderKeys.blendedGeometryForPlatform(
+        TargetPlatform.windows,
+        isWeb: false,
+      ),
+      endsWith('shaders/liquid_glass_geometry_blended_windows.frag'),
+    );
+    expect(
+      ShaderKeys.blendedGeometryForPlatform(
+        TargetPlatform.android,
+        isWeb: false,
+      ),
+      endsWith('shaders/liquid_glass_geometry_blended.frag'),
+    );
+    expect(
+      ShaderKeys.blendedGeometryForPlatform(
+        TargetPlatform.windows,
+        isWeb: true,
+      ),
+      endsWith('shaders/liquid_glass_geometry_blended.frag'),
+    );
     expect(
       ShaderKeys.liquidGlassRenderForPlatform(
         TargetPlatform.windows,
@@ -41,13 +63,28 @@ void main() {
     );
   });
 
-  test('Windows 安全 Shader 保持 uniform 契约且不包含 mode 2', () {
+  test('Windows 有界 Shader 保持 host 契约与 Premium 核心效果', () {
     final fullSource =
         File('shaders/liquid_glass_final_render.frag').readAsStringSync();
     final windowsSource = File(
       'shaders/liquid_glass_final_render_windows.frag',
     ).readAsStringSync();
-    final uniformPattern = RegExp(r'uniform\s+\w+\s+\w+\s*;');
+    final fullGeometrySource = File(
+      'shaders/liquid_glass_geometry_blended.frag',
+    ).readAsStringSync();
+    final windowsGeometrySource = File(
+      'shaders/liquid_glass_geometry_blended_windows.frag',
+    ).readAsStringSync();
+    // 中文注释：必须从行首匹配真实声明，不能把历史保留的
+    // `// uniform float uRefractScale` 注释误算进 host 契约。
+    final uniformPattern = RegExp(
+      r'^[ \t]*uniform\s+\w+\s+\w+[ \t]*;',
+      multiLine: true,
+    );
+    final geometryUniformPattern = RegExp(
+      r'^[ \t]*(?:layout\([^\n]+\)[ \t]*)?uniform\s+[^;]+;',
+      multiLine: true,
+    );
 
     // 中文注释：两个 Shader 由同一个 Dart 宿主写入固定 slot；声明的数量、
     // 类型和顺序必须完全一致，否则只修复编译问题也会引入 uniform 错位。
@@ -66,6 +103,41 @@ void main() {
     expect(fullSource, contains('sdfSquircleAsym'));
     expect(windowsSource, isNot(contains('sdfSquircleAsym')));
     expect(windowsSource, isNot(contains('superellipse_sdf.glsl')));
+
+    // 中文注释：geometry host 同样按固定槽位写 size、optical、shape settings
+    // 与 112 个 shape float。Windows 文件可以更换计算策略，但声明顺序不能
+    // 改，否则性能修复会在首次 setFloat 时变成 uniform 越界或错位。
+    expect(
+      geometryUniformPattern
+          .allMatches(windowsGeometrySource)
+          .map((match) => match.group(0)!.replaceAll(RegExp(r'\s+'), ' '))
+          .toList(),
+      orderedEquals(
+        geometryUniformPattern
+            .allMatches(fullGeometrySource)
+            .map((match) => match.group(0)!.replaceAll(RegExp(r'\s+'), ' '))
+            .toList(),
+      ),
+    );
+
+    // 中文注释：这些断言描述 Windows 驱动的编译预算，而不是具体颜色常量。
+    // geometry 只能执行一次前向场融合，最终合成最多保留三通道硬件采样；
+    // 同时仍需保留折射、色散、颜色与显式快照语义，防止修成 minimal 外观。
+    expect(windowsGeometrySource, isNot(contains('sdf.glsl')));
+    expect(windowsGeometrySource, isNot(contains('superellipse_sdf.glsl')));
+    expect(windowsGeometrySource,
+        isNot(matches(RegExp(r'\b(?:pow|exp2|log2)\s*\('))));
+    expect(
+      RegExp(r'sceneField\(').allMatches(windowsGeometrySource).length,
+      2,
+      reason: '应只有函数声明和 main 中的一次场计算',
+    );
+    expect(windowsSource, isNot(contains('edge_treatment.glsl')));
+    expect(windowsSource, isNot(contains('textureBilinear')));
+    expect(windowsSource, contains('refract('));
+    expect(windowsSource, contains('redSample'));
+    expect(windowsSource, contains('applyGlassTint'));
+    expect(windowsSource, contains('uCaptureConfig'));
   });
 
   testWidgets('非 Windows 抽屉持续增高和底角归零时不分配整面几何纹理', (tester) async {
