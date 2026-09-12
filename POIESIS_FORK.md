@@ -108,13 +108,14 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      各自保存 `edge_treatment.glsl` 规范化源码的 Adler-32 校验值。修改共享
      边缘算法时必须同步四个标记，既让入口内容变化以强制重编译，也由回归测试
      阻止旧 Shader 二进制被静默复用；
-   - 原生 iOS 通过统一 `uHighlightHeadroom=1.22` 将 EDR 能量拆成四层：玻璃
-     主体使用 12% 可用 headroom（约 `1.0264`），镜面、Fresnel 与顶部宽肩部
-     使用 36%（约 `1.079`），仅顶部不足约 1dp 的核心使用完整 `1.22`；底部
-     SDR 反射为顶部 70%，EDR 峰值使用 50% headroom（约 `1.11`）。层间使用
-     五次 smootherstep，端点一、二阶导数均为零；预乘路径继续以自身 alpha
-     缩放白点，灰白/冷黑结构边、折射与透明度不变。Web 和非 iOS 原生平台
-     逐帧写 `1.0`，视觉保持不变；Premium
+   - 原生 iOS 由宿主读取当前窗口 `UIScreen.currentEDRHeadroom`，组件库默认
+     `1.0`，只在实时值超过 SDR 白点时启用并封顶为 `1.22`；Web、非 iOS、
+     普通 SDR 屏幕与桥接缺失场景都写 `1.0`。SDR 的宽高光基底恢复为 HDR
+     改造前的胶囊 2dp/3dp 平台与圆形 12%/10% 月牙平台；EDR 另用独立的
+     0.75dp/0.50dp 窄遮罩，调整 HDR 核心不再改变 SDR 可见性。EDR 能量仍
+     拆成四层：主体使用 12% 可用 headroom，镜面、Fresnel 与顶部肩部使用
+     36%，仅顶部不足约 1dp 的核心使用完整实时白点；底部 EDR 峰值使用 50%
+     headroom。层间使用五次 smootherstep，预乘 alpha、结构边、折射不变；Premium
      实时与 capture 使用 slot 49，Standard 使用 slot 37，交互指示器使用
      slot 38，复用的 FragmentShader 不会继承上一 surface 的状态；
    - 解析式路径只在轮廓窄带增加八次 cache-free SDF ALU；Premium 多形状仅在

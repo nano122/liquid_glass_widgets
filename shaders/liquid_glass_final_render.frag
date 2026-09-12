@@ -34,7 +34,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
+// POIESIS_EDGE_TREATMENT_ADLER32: 719ebab0
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
@@ -128,7 +128,7 @@ uniform float uTopRefractionOnly;
 // 中文说明：仅显式快照启用硬件双线性和黑色模态遮罩；实时 backdrop 每帧写零。
 uniform vec2 uCaptureConfig; // x: capture enabled, y: barrier opacity
 
-// Slot 49：最终高光白点。iOS 原生 EDR 写 1.22，其他 surface 写 1.0；
+// Slot 49：最终高光白点。iOS 写当前 EDR 值并封顶 1.22，其他 surface 写 1.0；
 // 共享函数从该范围分配主体柔光、宽肩部和极窄峰值，结构边仍保持 SDR。
 uniform float uHighlightHeadroom;
 
@@ -519,7 +519,7 @@ void main() {
     // 颜色会在最终合成时复用折射背景样本，不增加纹理读取、uniform 或渲染 Pass。
     // 中文说明：顶、底反射必须保留为独立通道，最终合成才能让底部始终弱于
     // 顶部，并只在顶部极窄核心开放完整 1.22 峰值。
-    vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
+    vec4 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfiles(
         geometryUV,
         glassLogicalSize
     );

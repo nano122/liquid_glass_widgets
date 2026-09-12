@@ -10,6 +10,7 @@ import 'src/renderer/liquid_glass_renderer.dart';
 import 'src/renderer/shaders.dart';
 
 import 'src/renderer/internal/multi_shader_builder.dart';
+import 'src/renderer/internal/glass_highlight_headroom.dart';
 import 'widgets/shared/glass_adaptive_scope.dart';
 import 'widgets/shared/glass_effect.dart';
 import 'widgets/shared/glass_accessibility_scope.dart';
@@ -85,6 +86,13 @@ class LiquidGlassWidgets {
   /// zero overhead in shipped apps. Set to `false` to suppress it during
   /// profiling sessions where the warning would be a false positive.
   ///
+  /// **`highlightHeadroomResolver`** (optional)\
+  /// Host callback that reads the current iOS display's EDR headroom. The
+  /// callback is invoked only on native iOS; missing, invalid, and SDR values
+  /// keep the shader white point at `1.0`, while EDR values are capped at the
+  /// package's safe `1.22` peak. A host that does not configure an EDR Metal
+  /// surface should omit this callback and remain SDR.
+  ///
   /// ### Tasks performed
   ///
   /// 1. Pre-warms / precaches the lightweight fragment shader.
@@ -104,8 +112,18 @@ class LiquidGlassWidgets {
   static Future<void> initialize({
     bool enablePerformanceMonitor = true,
     GlassWarmUpMode warmUpMode = GlassWarmUpMode.auto,
+    Future<double?> Function()? highlightHeadroomResolver,
   }) async {
     debugPrint('[LiquidGlass] Initializing library...');
+
+    // 中文说明：先解析当前 surface 的真实高光白点，再创建/预热 Shader。
+    // resolver 由宿主注入且只在原生 iOS 调用；普通 SDR 屏幕会得到精确 1.0，
+    // 通道缺失时宿主也应返回 null，让组件库安全地保持 SDR 基线。
+    await initializeGlassHighlightHeadroom(
+      platform: defaultTargetPlatform,
+      isWeb: kIsWeb,
+      resolver: highlightHeadroomResolver,
+    );
 
     // 1. Pre-warm shader programs in parallel — fast, async disk I/O only.
     // Loads FragmentProgram objects into RAM so widgets render without

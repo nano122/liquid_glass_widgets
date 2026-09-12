@@ -9,7 +9,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
+  // POIESIS_EDGE_TREATMENT_ADLER32: 719ebab0
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -207,7 +207,7 @@ void main() {
   );
   // 中文说明：indicator 与普通玻璃使用相同的顶强底弱双通道曲线，尺寸或
   // jelly 形变时仍连续插值，不会因为交互路径不同而出现亮度跳变。
-  vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
+  vec4 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfiles(
     localUV,
     uSize
   );
@@ -569,8 +569,8 @@ void main() {
     uEdgeAbsorption
   );
 
-  // 中文说明：平台 uniform 仍是最终安全上限；真正达到 1.22 的只有共享函数
-  // 生成的顶部极窄核心，其他高光已在进入该函数时收束到肩部范围。
+  // 中文说明：平台 uniform 是当前屏幕对应的最终安全上限（最高 1.22）；真正
+  // 达到该上限的只有顶部极窄核心，其他高光已在共享函数中收束到肩部范围。
   finalColor = clamp(finalColor, vec3(0.0), vec3(uHighlightHeadroom));
   
   // ==========================================================================

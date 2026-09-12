@@ -10,7 +10,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
+  // POIESIS_EDGE_TREATMENT_ADLER32: 719ebab0
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -50,7 +50,7 @@ uniform float uRefractionEnabled;
 // 36: uTopRefractionOnly — 开启时仅顶部约 20% 执行折射、pinch 与 RGB 色散；
 // 下方仍以原坐标读取背景，保留完整材质与光照合成。
 uniform float uTopRefractionOnly;
-// 37: uHighlightHeadroom — iOS 原生 EDR 为 1.22，其他 surface 为 1.0。
+// 37: uHighlightHeadroom — iOS 使用当前 EDR 值（最高 1.22），其他 surface 为 1.0。
 // 共享函数会分配主体柔光、宽肩部和极窄峰值；折射采样与结构边颜色不变。
 uniform float uHighlightHeadroom;
 
@@ -241,7 +241,7 @@ void main() {
   );
   // 中文说明：共享双通道遮罩保留顶部和底部各自的能量，避免先相加后无法
   // 控制底部峰值；Standard 的三条输出分支都复用同一结果。
-  vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
+  vec4 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfiles(
     localUV,
     uSize
   );

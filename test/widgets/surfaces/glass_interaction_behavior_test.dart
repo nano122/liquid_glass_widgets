@@ -59,6 +59,16 @@ Widget _buildSearchableBar({
   );
 }
 
+/// 查找真正会绘制颜色的交互发光，忽略 indicator 内部的透明结构占位层。
+///
+/// 中文说明：`AnimatedGlassIndicator` 固定保留一个透明 `GlassGlow` 作为
+/// `GlassEffect` 的结构子节点，因此不能再用组件数量判断交互发光是否开启。
+/// 这里直接验证颜色 alpha，既覆盖透明短路契约，也不会误判结构占位层。
+Finder get _visibleGlassGlows => find.byWidgetPredicate(
+      (widget) => widget is GlassGlow && widget.glowColor.a > 0,
+      description: 'GlassGlow with a non-transparent color',
+    );
+
 // =============================================================================
 // Tests
 // =============================================================================
@@ -281,67 +291,58 @@ void main() {
       });
     }
 
-    // ── GlassGlow presence ────────────────────────────────────────────────────
+    // ── 可见交互 GlassGlow ───────────────────────────────────────────────────
 
-    testWidgets(
-        'behavior=none: GlassGlow is NOT in widget tree (transparent short-circuit)',
-        (tester) async {
+    testWidgets('behavior=none: 不存在可见交互 GlassGlow', (tester) async {
       await tester.pumpWidget(_buildBottomBar(
         behavior: GlassInteractionBehavior.none,
       ));
       await tester.pump();
-      // _wrapWithGlow skips GlassGlow when color.a == 0
-      expect(find.byType(GlassGlow), findsNothing);
+      expect(_visibleGlassGlows, findsNothing);
     });
 
-    testWidgets('behavior=scaleOnly: GlassGlow is NOT in widget tree',
-        (tester) async {
+    testWidgets('behavior=scaleOnly: 不存在可见交互 GlassGlow', (tester) async {
       await tester.pumpWidget(_buildBottomBar(
         behavior: GlassInteractionBehavior.scaleOnly,
       ));
       await tester.pump();
-      expect(find.byType(GlassGlow), findsNothing);
+      expect(_visibleGlassGlows, findsNothing);
     });
 
-    testWidgets('behavior=glowOnly: GlassGlow IS in widget tree',
-        (tester) async {
+    testWidgets('behavior=glowOnly: 存在可见交互 GlassGlow', (tester) async {
       await tester.pumpWidget(_buildBottomBar(
         behavior: GlassInteractionBehavior.glowOnly,
       ));
       await tester.pump();
-      expect(find.byType(GlassGlow), findsWidgets);
+      expect(_visibleGlassGlows, findsWidgets);
     });
 
-    testWidgets('behavior=full: GlassGlow IS in widget tree', (tester) async {
+    testWidgets('behavior=full: 存在可见交互 GlassGlow', (tester) async {
       await tester.pumpWidget(_buildBottomBar(
         behavior: GlassInteractionBehavior.full,
       ));
       await tester.pump();
-      expect(find.byType(GlassGlow), findsWidgets);
+      expect(_visibleGlassGlows, findsWidgets);
     });
 
-    // ── Explicit transparent color also suppresses GlassGlow ─────────────────
+    // ── 显式透明颜色同样关闭可见交互发光 ────────────────────────────────────
 
-    testWidgets(
-        'explicit Colors.transparent interactionGlowColor skips GlassGlow',
-        (tester) async {
+    testWidgets('显式 Colors.transparent 不产生可见交互 GlassGlow', (tester) async {
       await tester.pumpWidget(_buildBottomBar(
         behavior: GlassInteractionBehavior.full,
         interactionGlowColor: Colors.transparent,
       ));
       await tester.pump();
-      // Even with full behavior, a transparent glow color should skip the wrapper
-      expect(find.byType(GlassGlow), findsNothing);
+      expect(_visibleGlassGlows, findsNothing);
     });
 
-    testWidgets('custom non-transparent glow color renders GlassGlow',
-        (tester) async {
+    testWidgets('自定义非透明颜色产生可见交互 GlassGlow', (tester) async {
       await tester.pumpWidget(_buildBottomBar(
         behavior: GlassInteractionBehavior.full,
         interactionGlowColor: const Color(0x33FFFFFF),
       ));
       await tester.pump();
-      expect(find.byType(GlassGlow), findsWidgets);
+      expect(_visibleGlassGlows, findsWidgets);
     });
 
     // ── behavior=none smoke — no crash, content still visible ─────────────────
@@ -419,14 +420,14 @@ void main() {
         ),
       );
 
-      // Initially: GlassGlow present for full behavior
-      expect(find.byType(GlassGlow), findsWidgets);
+      // 中文说明：full 初始存在可见交互发光。
+      expect(_visibleGlassGlows, findsWidgets);
 
       await tester.tap(find.text('toggle'));
       await tester.pump();
 
-      // After switching to none: GlassGlow gone
-      expect(find.byType(GlassGlow), findsNothing);
+      // 中文说明：切换到 none 后只剩透明结构层，不应再有可见交互发光。
+      expect(_visibleGlassGlows, findsNothing);
     });
 
     testWidgets('behavior can switch from none to full', (tester) async {
@@ -455,12 +456,12 @@ void main() {
         ),
       );
 
-      expect(find.byType(GlassGlow), findsNothing);
+      expect(_visibleGlassGlows, findsNothing);
 
       await tester.tap(find.text('toggle'));
       await tester.pump();
 
-      expect(find.byType(GlassGlow), findsWidgets);
+      expect(_visibleGlassGlows, findsWidgets);
     });
   });
 

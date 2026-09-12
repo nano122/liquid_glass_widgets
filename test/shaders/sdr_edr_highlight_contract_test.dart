@@ -1,0 +1,112 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+
+void main() {
+  final helperFile = File('shaders/edge_treatment.glsl');
+  final helperSource = helperFile.readAsStringSync(encoding: utf8);
+
+  test('SDR 宽基底与 EDR 窄核心使用两组独立几何', () {
+    // 中文说明：这些值就是 HDR 改造前可见的 SDR 高光宽度。回归测试明确锁定
+    // 它们，并同时要求 EDR 使用独立命名常量，防止再次为缩窄 HDR 而误伤 SDR。
+    expect(
+      helperSource,
+      contains('const float kTopAreaHighlightPlateau = 0.03;'),
+    );
+    expect(
+      helperSource,
+      contains('const float kBottomAreaHighlightPlateau = 0.04;'),
+    );
+    expect(
+      helperSource,
+      contains(
+        'const float kTopAreaHighlightPlateauMaxLogicalHeight = 2.0;',
+      ),
+    );
+    expect(
+      helperSource,
+      contains(
+        'const float kBottomAreaHighlightPlateauMaxLogicalHeight = 3.0;',
+      ),
+    );
+    expect(
+      helperSource,
+      contains('const float kCrescentTopPlateau = 0.12;'),
+    );
+    expect(
+      helperSource,
+      contains('const float kCrescentBottomPlateau = 0.10;'),
+    );
+    expect(
+      helperSource,
+      contains('const float kTopAreaHighlightEdrPlateau = 0.012;'),
+    );
+    expect(
+      helperSource,
+      contains('const float kBottomAreaHighlightEdrPlateau = 0.008;'),
+    );
+    expect(
+      helperSource,
+      contains('vec4 getAdaptiveAreaHighlightExposureProfiles('),
+    );
+    expect(helperSource, contains('highlightExposureProfiles.xy'));
+    expect(helperSource, contains('highlightExposureProfiles.zw'));
+  });
+
+  test('headroom 为 1.0 时 EDR 层没有任何 SDR 二次提亮', () {
+    // 中文说明：EDR 增量必须显式乘 hdrRange。旧公式以 1.0 白点减去当前颜色，
+    // 即使 hdrRange 为零也会再提亮窄核心，导致 SDR 输出不再是独立基线。
+    expect(
+      helperSource,
+      contains('vec3(safeColorAlpha * hdrRange * edrEnergy)'),
+    );
+    expect(
+      helperSource,
+      isNot(contains('max(edrWhitePoint - withSdrHighlight')),
+    );
+    expect(
+      helperSource,
+      isNot(contains('kBottomHighlightSdrStrength')),
+    );
+  });
+
+  test('四个 Shader 入口携带最新共享边缘源码校验值', () {
+    final normalizedSource =
+        helperSource.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final expectedHash = _adler32Hex(utf8.encode(normalizedSource));
+    const entryPaths = <String>[
+      'shaders/lightweight_glass.frag',
+      'shaders/interactive_indicator.frag',
+      'shaders/liquid_glass_final_render.frag',
+      'shaders/liquid_glass_final_render_windows.frag',
+    ];
+
+    for (final path in entryPaths) {
+      final source = File(path).readAsStringSync(encoding: utf8);
+      expect(
+        source,
+        contains('POIESIS_EDGE_TREATMENT_ADLER32: $expectedHash'),
+        reason: '$path 必须强制失效旧的增量 Shader 编译产物',
+      );
+      expect(
+        source,
+        contains('getAdaptiveAreaHighlightExposureProfiles('),
+        reason: '$path 必须传递独立的 SDR/EDR 四通道遮罩',
+      );
+    }
+  });
+}
+
+/// 计算与 Shader 入口注释一致的 Adler-32，小写十六进制固定补齐八位。
+String _adler32Hex(List<int> bytes) {
+  const modulus = 65521;
+  var a = 1;
+  var b = 0;
+  for (final byte in bytes) {
+    a = (a + byte) % modulus;
+    b = (b + a) % modulus;
+  }
+  final value = (b << 16) | a;
+  return value.toRadixString(16).padLeft(8, '0');
+}

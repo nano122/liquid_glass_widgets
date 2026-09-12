@@ -36,7 +36,7 @@ precision highp float; // mediump causes colour banding (10-bit mantissa on mobi
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: a5c78f87
+// POIESIS_EDGE_TREATMENT_ADLER32: 719ebab0
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 #include "render.glsl"
@@ -496,7 +496,7 @@ void main() {
     // 颜色会在最终合成时复用折射背景样本，不增加纹理读取、uniform 或渲染 Pass。
     // 中文说明：Windows 虽保持 SDR 1.0，仍与其他平台共享独立的顶底遮罩，
     // 避免兼容 Shader 的高光形态与主 Shader 分叉。
-    vec2 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfile(
+    vec4 verticalAreaHighlightExposureProfile = getAdaptiveAreaHighlightExposureProfiles(
         geometryUV,
         glassLogicalSize
     );

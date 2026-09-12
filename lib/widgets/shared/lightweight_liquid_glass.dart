@@ -1082,8 +1082,8 @@ class _RenderLightweightGlass extends RenderProxyBox
     // pinch 与多通道色散，下方区域仍保留一次原坐标采样完成材质合成。
     shader.setFloat(index++, _settings.topRefractionOnly ? 1.0 : 0.0);
 
-    // 37: uHighlightHeadroom — iOS 原生 EDR surface 使用 1.22；其他平台
-    // 继续写 1.0。该值只参与现有高光合成，不改变背景折射和玻璃底色。
+    // 37: uHighlightHeadroom — iOS 原生 EDR surface 使用当前屏幕实测值并封顶
+    // 1.22；SDR、Web 与其他平台写 1.0。该值不改变背景折射和玻璃底色。
     shader.setFloat(index++, glassHighlightHeadroom);
   }
 }
