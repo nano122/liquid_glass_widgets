@@ -360,6 +360,14 @@ class GlassButtonGroup extends StatelessWidget {
       settings: settings,
       platformViewBackdrop: platformViewBackdrop,
       shape: LiquidRoundedRectangle(borderRadius: borderRadius),
+      // 中文说明：children 模式的外壳永远只有一个圆角矩形，直接在最终 Shader
+      // 中解析求 SDF，与 items 模式（GlassButton → GlassEffect）保持同一条
+      // 解析路径。几何纹理路径在小米平板 5（Adreno 640 / Impeller OpenGLES /
+      // DPR 2.25）上实测会让 8 点 RGSS 描边退化为逐像素单采样，左右圆弧出现
+      // 台阶和断续；解析路径在同一设备上连续平滑，同时省掉尺寸变化时的整面
+      // 几何栅格化。共享父层（useOwnLayer: false）、多形状或不可逆变换时，
+      // 渲染对象会自行回退 geometry texture，这里无需额外判断。
+      preferAnalyticGeometry: true,
       padding: EdgeInsets.zero,
       clipBehavior: Clip.antiAlias,
       child: IntrinsicHeight(

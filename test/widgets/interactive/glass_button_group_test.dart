@@ -102,6 +102,37 @@ void main() {
           (c.constraints?.maxHeight == 1.0));
       expect(hasDivider, isFalse);
     });
+
+    testWidgets('children 模式外壳请求解析 SDF，避免几何纹理描边退化',
+        (tester) async {
+      // 中文注释：回归防护——小米平板 5（Adreno 640 / Impeller OpenGLES /
+      // DPR 2.25）上 children 模式走 geometry texture 时，8 点 RGSS 描边退化
+      // 为逐像素单采样，圆弧出现台阶与断续。外壳必须与 items 模式一样请求
+      // 解析路径；测试环境不支持 ShaderFilter，因此断言请求参数本身。
+      await tester.pumpWidget(
+        CupertinoApp(
+          home: Center(
+            child: GlassButtonGroup(
+              useOwnLayer: true,
+              quality: GlassQuality.premium,
+              showDividers: false,
+              children: [
+                GlassButton(
+                  icon: const Icon(CupertinoIcons.add),
+                  style: GlassButtonStyle.transparent,
+                  onTap: () {},
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final container =
+          tester.widget<GlassContainer>(find.byType(GlassContainer));
+      expect(container.preferAnalyticGeometry, isTrue);
+      expect(container.shape, isA<LiquidRoundedRectangle>());
+    });
   });
 
   group('GlassButtonGroup.icons', () {
