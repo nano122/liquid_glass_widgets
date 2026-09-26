@@ -132,7 +132,32 @@ void main() {
       2,
       reason: '应只有函数声明和 main 中的一次场计算',
     );
-    expect(windowsSource, isNot(contains('edge_treatment.glsl')));
+    // 中文注释：2026-09-26 起 Windows 合成 Shader 重新包含共享边缘算法，
+    // 否则最外轮廓缺少浅灰环与左右深边，被 Fresnel 提亮成白边。编译预算
+    // 仍通过“背景不使用手工双线性”和“8 点采样只在轮廓窄带执行”控制；
+    // edge_treatment.glsl 中未调用的面积高光函数会被 impellerc 剔除。
+    expect(windowsSource, contains('#include "edge_treatment.glsl"'));
+    expect(windowsSource, contains('applyDualLayerRim('));
+    expect(windowsSource, contains('getInnerHighlightGate('));
+    expect(
+      RegExp(r'sampleAnalyticEdgeAtOffset\(kEdgeRgss\d')
+          .allMatches(windowsSource)
+          .length,
+      8,
+      reason: '解析路径应与通用 Shader 一样执行 8 点 RGSS',
+    );
+    expect(
+      RegExp(r'sampleTextureEdgeAtOffset\(kEdgeRgss\d')
+          .allMatches(windowsSource)
+          .length,
+      8,
+      reason: '纹理路径应与通用 Shader 一样执行 8 点 RGSS',
+    );
+    expect(
+      windowsSource,
+      contains('centerRimDistance > conservativeEdgeReach'),
+      reason: '内部片元必须跳过 8 点采样，避免整面玻璃付出边缘成本',
+    );
     expect(windowsSource, isNot(contains('textureBilinear')));
     expect(windowsSource, contains('refract('));
     expect(windowsSource, contains('redSample'));

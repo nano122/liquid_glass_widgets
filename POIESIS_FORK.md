@@ -42,7 +42,7 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
    提前退化为 `_FrostedFallback`；Premium 继续执行原生折射 shader，Standard
    与不支持 ShaderFilter 的平台继续执行轻量 shader。底层 renderer 仍以
    `effectiveBlur > 0` 为创建模糊层的唯一条件，因此零值不会产生高斯模糊层。
-7. Premium、Standard 与交互指示器共用 `edge_treatment.glsl` 的双层边缘：
+7. Premium（含 Windows 有界合成入口）、Standard 与交互指示器共用 `edge_treatment.glsl` 的双层边缘：
    - 所有玻璃向外投射的 elevation / BoxShadow 统一关闭：`GlassShadow` 集中策略让
      `LiquidGlassSettings.effectiveShadow` 即使收到显式 custom shadow 也返回空列表，
      因此 Premium SDF、Standard 轻量路径、底栏阴影覆盖层和背景图 FrostedSurface
@@ -103,9 +103,10 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      hairline rim 向内渐入，不再覆盖最外轮廓；
    - 共享描边函数不再把 `edgeAbsorption` 当作显示 gate；固定低透明度保证关闭
      吸收后仍有可见但不发亮的玻璃轮廓；
-   - Flutter 增量 Shader 构建不会追踪本地 `#include` 依赖，三个入口文件因此
+   - Flutter 增量 Shader 构建不会追踪本地 `#include` 依赖，四个入口文件（含
+     2026-09-26 恢复描边的 `liquid_glass_final_render_windows.frag`）因此
      各自保存 `edge_treatment.glsl` 规范化源码的 Adler-32 校验值。修改共享
-     边缘算法时必须同步三个标记，既让入口内容变化以强制重编译，也由回归测试
+     边缘算法时必须同步全部标记，既让入口内容变化以强制重编译，也由回归测试
      阻止旧 Shader 二进制被静默复用；
    - 解析式路径只在轮廓窄带增加八次 cache-free SDF ALU；Premium 多形状仅在
      同一窄带增加八个 cache-hot geometry 样本。上下区域高光只增加局部坐标

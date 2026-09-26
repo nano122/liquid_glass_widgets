@@ -336,7 +336,7 @@ On Windows (Flutter 3.47+ Impeller using ANGLE) and budget Android devices runni
 1. **Zero GPU Work Before `runApp()`:** `initialize()` executes only async disk-to-RAM I/O — no rasterization, no `toImageSync` calls — so the OS window always appears immediately on Frame 1.
 2. **First-Class Android Vulkan Support:** Flagship Android devices (Galaxy S23/S24/S25, Pixel 7/8/9, OnePlus 12) running Impeller Vulkan receive the full 16-shape unrolled geometry pipeline and async preloaded shaders, matching iOS Metal frame-for-frame.
 3. **Safe Desktop Defaults:** `GlassAdaptiveScope` statically caps Windows, Linux, and Web at `GlassQuality.standard` (crisp 2D liquid glass with real iOS 26 squircle curves, dual specular highlights, and blur) for silky-smooth 60/120fps out-of-the-box.
-4. **Bounded Windows Premium AST:** Native Windows selects an 8-shape, forward-only geometry program that computes SDF distance and gradient together. Its composite uses at most three hardware backdrop samples and reuses the centre geometry sample for edge lighting. The geometry approximation maps superellipses to the same-radius rounded-rectangle field on Windows; ellipse and rounded-rectangle primitives remain analytic. Metal and Vulkan keep the full 16-shape, bidirectional, supersampled pipeline.
+4. **Bounded Windows Premium AST:** Native Windows selects an 8-shape, forward-only geometry program that computes SDF distance and gradient together. Its composite uses at most three hardware backdrop samples and reuses the centre geometry sample for edge lighting, while the dual-layer structural rim (full cool-grey ring plus lateral dark edge, shared `edge_treatment.glsl`) uses the same 8-point RGSS edge supersampling as the other platforms, only inside the outline band. The geometry approximation maps superellipses to the same-radius rounded-rectangle field on Windows; ellipse and rounded-rectangle primitives remain analytic. Metal and Vulkan keep the full 16-shape, bidirectional, supersampled pipeline.
 
 ## Glass Quality Modes
 
@@ -1117,4 +1117,10 @@ Skia/Web 保持各自原有分流。Windows 首帧的后续修复和实测结果
 
 Poiesis Windows Debug EXE 的冷启动对照中，原 Premium 约 42 秒进入主页面；
 上述两个有界 Shader 组合约 7 秒完整显示主页面，接近相同数据下 minimal 的
-约 4.6 秒。其他平台继续加载通用 16 形状和完整边缘超采样实现。
+约 4.6 秒。其他平台继续加载通用 16 形状实现。
+
+2026-09-26 起，Windows 最终 Pass 重新包含共享 `edge_treatment.glsl`：与通用
+Shader 一样只在轮廓窄带执行 8 点 RGSS 边缘超采样，白色镜面/Fresnel/ambient rim
+从描边内侧渐入，最后叠加完整冷灰环与左右深色边。此前该 Pass 省略了这套逻辑，
+Fresnel 把最外轮廓提亮成白边，与其他平台的深色描边不一致。背景仍最多采样三次、
+不使用手工双线性，GLES 产物约 48KB（通用版约 190KB）。
