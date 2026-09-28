@@ -8,6 +8,7 @@ library;
 import 'dart:math' as math;
 
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 
 import '../../../widgets/shared/glass_focus_region.dart';
 import '../../../constants/glass_defaults.dart';
@@ -452,6 +453,30 @@ class BottomBarExtraBtn extends StatelessWidget {
 /// - Spring-based alignment animation ([VelocitySpringBuilder])
 /// - Jelly deformation during drag ([SpringBuilder] + thickness)
 /// - Dual rendering modes: [MaskingQuality.off] and [MaskingQuality.high]
+/// iOS 底部导航选中胶囊静止时保留的玻璃可见度。
+///
+/// 中文说明：数值保持克制，避免选中态抢过整块底栏的主体高光。
+const double kIosRestingIndicatorGlassVisibility = 0.18;
+
+/// 底部导航选中胶囊在静止时的玻璃可见度（0 表示静止为实色填充）。
+///
+/// 中文说明：静止玻璃会让选中胶囊每帧常驻一层带背景采样的玻璃 Pass。
+/// 安卓真机 A/B（2026-09-28）显示仅关闭这一项，概要页 96→113、AI 页
+/// 72→82 帧，是 HDR 合并后掉帧的主因；而安卓不支持 EDR 高光，静止玻璃
+/// 的视觉收益有限。因此只在原生 iOS 保留，其余平台（含 Web）恢复上游
+/// “静止实色、交互时才绘制玻璃”：AnimatedGlassIndicator 在 fade ≤ 0.01
+/// 时直接输出空占位，静止状态不再产生任何玻璃 Pass。
+@visibleForTesting
+double restingIndicatorGlassVisibilityFor({
+  required TargetPlatform platform,
+  required bool isWeb,
+}) {
+  if (isWeb || platform != TargetPlatform.iOS) {
+    return 0.0;
+  }
+  return kIosRestingIndicatorGlassVisibility;
+}
+
 class TabIndicator extends StatefulWidget {
   const TabIndicator({
     required this.childUnselected,
@@ -552,9 +577,13 @@ class TabIndicatorState extends State<TabIndicator>
 
   // 中文说明：上游 1.7.2（#344）改为按 GlassTheme.brightnessOf 解析默认指示器颜色，
   // 旧的固定白色回退常量已无引用，因此只保留 Poiesis 的静止玻璃可见度。
-  // 底部导航选中胶囊在静止时保留一小部分玻璃材质，不再完全
-  // 退化为实色填充。数值保持克制，避免选中态抢过整块底栏的主体高光。
-  static const _restingIndicatorGlassVisibility = 0.18;
+  // 底部导航选中胶囊静止时是否保留玻璃材质按平台决定（仅原生 iOS 保留），
+  // 详见 [restingIndicatorGlassVisibilityFor] 的安卓掉帧 A/B 说明。
+  static double get _restingIndicatorGlassVisibility =>
+      restingIndicatorGlassVisibilityFor(
+        platform: defaultTargetPlatform,
+        isWeb: kIsWeb,
+      );
 
   final GlobalKey _iconLayerKey = GlobalKey();
 

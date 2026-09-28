@@ -362,7 +362,8 @@ float getGlassHighlightShoulderWhitePoint(float highlightHeadroomMultiplier) {
 
 vec4 getAdaptiveAreaHighlightExposureProfiles(
     vec2 localUV,
-    vec2 glassLogicalSize
+    vec2 glassLogicalSize,
+    float highlightHeadroomMultiplier
 ) {
     vec2 safeSize = max(glassLogicalSize, vec2(0.0001));
     vec2 clampedUV = clamp(localUV, 0.0, 1.0);
@@ -395,14 +396,15 @@ vec4 getAdaptiveAreaHighlightExposureProfiles(
         kBottomAreaHighlightPlateau,
         kBottomAreaHighlightPlateauMaxLogicalHeight / safeSize.y
     );
-    float effectiveTopEdrPlateau = min(
-        kTopAreaHighlightEdrPlateau,
-        kTopAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
-    );
-    float effectiveBottomEdrPlateau = min(
-        kBottomAreaHighlightEdrPlateau,
-        kBottomAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
-    );
+    // 中文说明：EDR 窄遮罩只在 headroom 超过 SDR 白点时才会被消费；
+    // 安卓、Windows、Web 与 SDR iOS 恒为 1.0，此时 zw 保持 0 并跳过下方
+    // 两处 smoothstep 与两次 pow。uniform 驱动的分支对整个 draw 一致，
+    // 不产生 warp 发散。
+    bool edrEnabled = highlightHeadroomMultiplier > 1.0;
+    float capsuleTopEdr = 0.0;
+    float capsuleBottomEdr = 0.0;
+    float topCrescentEdr = 0.0;
+    float bottomCrescentEdr = 0.0;
 
     float capsuleTop = 1.0 - smoothstep(
         effectiveTopPlateau,
@@ -412,16 +414,6 @@ vec4 getAdaptiveAreaHighlightExposureProfiles(
     float capsuleBottom = smoothstep(
         1.0 - effectiveBottomExtent,
         1.0 - effectiveBottomPlateau,
-        clampedUV.y
-    );
-    float capsuleTopEdr = 1.0 - smoothstep(
-        effectiveTopEdrPlateau,
-        effectiveTopExtent,
-        clampedUV.y
-    );
-    float capsuleBottomEdr = smoothstep(
-        1.0 - effectiveBottomExtent,
-        1.0 - effectiveBottomEdrPlateau,
         clampedUV.y
     );
     // ---- 2. 圆形/球体贴合圆弧月牙高光（Crescent Arc Highlight） ----
@@ -439,15 +431,6 @@ vec4 getAdaptiveAreaHighlightExposureProfiles(
         inwardDepthTop
     );
     float topCrescent = pow(max(topCrescentProfile, 0.0), 0.85) * arcSpanTop;
-    float topCrescentEdrProfile = 1.0 - smoothstep(
-        kCrescentTopEdrPlateau,
-        kCrescentTopExtent,
-        inwardDepthTop
-    );
-    float topCrescentEdr = pow(
-        max(topCrescentEdrProfile, 0.0),
-        0.85
-    ) * arcSpanTop;
 
     // 底部托底月牙：计算片元相对于底部外圆弧的内向垂直深度
     float bottomArcY = sqrt(max(1.0 - p.x * p.x, 0.0));
@@ -461,15 +444,45 @@ vec4 getAdaptiveAreaHighlightExposureProfiles(
     float bottomCrescent = pow(max(bottomCrescentProfile, 0.0), 0.90)
         * arcSpanBottom
         * kCrescentBottomHighlightSdrStrength;
-    float bottomCrescentEdrProfile = smoothstep(
-        kCrescentBottomExtent,
-        kCrescentBottomEdrPlateau,
-        inwardDepthBottom
-    );
-    float bottomCrescentEdr = pow(
-        max(bottomCrescentEdrProfile, 0.0),
-        0.90
-    ) * arcSpanBottom;
+
+    if (edrEnabled) {
+        float effectiveTopEdrPlateau = min(
+            kTopAreaHighlightEdrPlateau,
+            kTopAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
+        );
+        float effectiveBottomEdrPlateau = min(
+            kBottomAreaHighlightEdrPlateau,
+            kBottomAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
+        );
+        capsuleTopEdr = 1.0 - smoothstep(
+            effectiveTopEdrPlateau,
+            effectiveTopExtent,
+            clampedUV.y
+        );
+        capsuleBottomEdr = smoothstep(
+            1.0 - effectiveBottomExtent,
+            1.0 - effectiveBottomEdrPlateau,
+            clampedUV.y
+        );
+        float topCrescentEdrProfile = 1.0 - smoothstep(
+            kCrescentTopEdrPlateau,
+            kCrescentTopExtent,
+            inwardDepthTop
+        );
+        topCrescentEdr = pow(
+            max(topCrescentEdrProfile, 0.0),
+            0.85
+        ) * arcSpanTop;
+        float bottomCrescentEdrProfile = smoothstep(
+            kCrescentBottomExtent,
+            kCrescentBottomEdrPlateau,
+            inwardDepthBottom
+        );
+        bottomCrescentEdr = pow(
+            max(bottomCrescentEdrProfile, 0.0),
+            0.90
+        ) * arcSpanBottom;
+    }
 
     // 中文说明：xy 是恢复到 HDR 改造前宽度与强度的 SDR 顶/底基底；zw 是
     // 独立窄 EDR 顶/底遮罩。两组都按圆形度连续插值，jelly 变形无跳变，
@@ -501,9 +514,11 @@ float getAdaptiveAreaHighlightExposureLift(
 ) {
     // 中文说明：保留旧的标量入口供兼容调用，只合成 xy 的 SDR 基底；
     // 圆形底部原有 70% 权重已经包含在 profile.y 中，胶囊底部保持旧版全强度。
+    // 中文说明：兼容入口只合成 SDR 基底，传入 1.0 让 EDR 遮罩整段跳过。
     vec4 profiles = getAdaptiveAreaHighlightExposureProfiles(
         localUV,
-        glassLogicalSize
+        glassLogicalSize,
+        1.0
     );
     return clamp(
         profiles.x + profiles.y,
@@ -607,37 +622,44 @@ vec3 applyVerticalAreaHighlight(
         * backdropExposureGate
         * sdrExposure;
 
-    // 中文说明：五次 smootherstep 生成无折点肩部；只有遮罩最后 4% 的顶部、
-    // 最后 2% 的底部进入核心。顶部核心可用完整 1.22，底部核心最多 1.11。
-    // 最终仍乘背景权重与亮度门控，避免暗背景凭空出现一块白光。
-    float topShoulder = smootherstep01(safeEdrExposureProfile.x);
-    float bottomShoulder = smootherstep01(safeEdrExposureProfile.y);
-    float topCore = smootherstep01(
-        (safeEdrExposureProfile.x - kTopHighlightCoreStart)
-            / (1.0 - kTopHighlightCoreStart)
-    );
-    float bottomCore = smootherstep01(
-        (safeEdrExposureProfile.y - kBottomHighlightCoreStart)
-            / (1.0 - kBottomHighlightCoreStart)
-    );
-    float topEdrEnergy = topShoulder * kTopHighlightShoulderEdrShare
-        + topCore * (1.0 - kTopHighlightShoulderEdrShare);
-    float bottomEdrEnergy = bottomShoulder * kBottomHighlightShoulderEdrShare
-        + bottomCore * (
-            kBottomHighlightPeakEdrShare
-                - kBottomHighlightShoulderEdrShare
+    // 中文说明：hdrRange 为 0 时 edrWhitePoint 恰为 safeColorAlpha、edrLift
+    // 恰为 0，下式与完整公式逐值相等；以 uniform 门控跳过四次
+    // smootherstep 与能量分配，安卓等 SDR surface 不再为不可见的 EDR 付费。
+    vec3 result = min(withSdrHighlight, vec3(safeColorAlpha));
+    if (hdrRange > 0.0) {
+        // 中文说明：五次 smootherstep 生成无折点肩部；只有遮罩最后 4% 的顶部、
+        // 最后 2% 的底部进入核心。顶部核心可用完整 1.22，底部核心最多 1.11。
+        // 最终仍乘背景权重与亮度门控，避免暗背景凭空出现一块白光。
+        float topShoulder = smootherstep01(safeEdrExposureProfile.x);
+        float bottomShoulder = smootherstep01(safeEdrExposureProfile.y);
+        float topCore = smootherstep01(
+            (safeEdrExposureProfile.x - kTopHighlightCoreStart)
+                / (1.0 - kTopHighlightCoreStart)
         );
-    float edrEnergy = clamp(max(topEdrEnergy, bottomEdrEnergy), 0.0, 1.0);
-    vec3 edrWhitePoint = vec3(
-        safeColorAlpha * (1.0 + hdrRange * edrEnergy)
-    );
-    // 中文说明：EDR 层只能增加“超过 1.0”的 hdrRange。旧实现从目标白点
-    // 减去当前 SDR 颜色，导致 hdrRange=0 时窄核心仍二次消费 SDR headroom；
-    // 这里直接按额外范围分配，确保 1.0 路径与 HDR 改造前逐值一致。
-    vec3 edrLift = vec3(safeColorAlpha * hdrRange * edrEnergy)
-        * backdropWeight
-        * backdropExposureGate;
-    return min(withSdrHighlight + edrLift, edrWhitePoint);
+        float bottomCore = smootherstep01(
+            (safeEdrExposureProfile.y - kBottomHighlightCoreStart)
+                / (1.0 - kBottomHighlightCoreStart)
+        );
+        float topEdrEnergy = topShoulder * kTopHighlightShoulderEdrShare
+            + topCore * (1.0 - kTopHighlightShoulderEdrShare);
+        float bottomEdrEnergy = bottomShoulder * kBottomHighlightShoulderEdrShare
+            + bottomCore * (
+                kBottomHighlightPeakEdrShare
+                    - kBottomHighlightShoulderEdrShare
+            );
+        float edrEnergy = clamp(max(topEdrEnergy, bottomEdrEnergy), 0.0, 1.0);
+        vec3 edrWhitePoint = vec3(
+            safeColorAlpha * (1.0 + hdrRange * edrEnergy)
+        );
+        // 中文说明：EDR 层只能增加“超过 1.0”的 hdrRange。旧实现从目标白点
+        // 减去当前 SDR 颜色，导致 hdrRange=0 时窄核心仍二次消费 SDR headroom；
+        // 这里直接按额外范围分配，确保 1.0 路径与 HDR 改造前逐值一致。
+        vec3 edrLift = vec3(safeColorAlpha * hdrRange * edrEnergy)
+            * backdropWeight
+            * backdropExposureGate;
+        result = min(withSdrHighlight + edrLift, edrWhitePoint);
+    }
+    return result;
 }
 
 vec3 applyDualLayerRim(

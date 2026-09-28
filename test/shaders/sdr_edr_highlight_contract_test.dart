@@ -107,6 +107,44 @@ void main() {
     }
   });
 
+  test('SDR surface（headroom ≤ 1.0）跳过 EDR 遮罩与能量分配', () {
+    // 中文说明：安卓掉帧排查发现 EDR 分层在 headroom=1.0 时仍逐像素计算
+    // 两次 pow、六次 smoothstep/smootherstep，结果却恒乘 0。这里锁定
+    // uniform 门控，防止后续改动把不可见的 EDR 开销重新带回 SDR 平台。
+    expect(
+      helperSource,
+      contains('bool edrEnabled = highlightHeadroomMultiplier > 1.0;'),
+    );
+    expect(helperSource, contains('if (edrEnabled) {'));
+    expect(helperSource, contains('if (hdrRange > 0.0) {'));
+    // hdrRange 为 0 时的默认结果必须等价于完整公式（edrWhitePoint = alpha，
+    // edrLift = 0），否则 SDR 输出会随门控发生偏移。
+    expect(
+      helperSource,
+      contains('vec3 result = min(withSdrHighlight, vec3(safeColorAlpha));'),
+    );
+    // 能量分配只能出现在门控之后。
+    expect(
+      helperSource.indexOf('float topShoulder = smootherstep01('),
+      greaterThan(helperSource.indexOf('if (hdrRange > 0.0) {')),
+    );
+    for (final path in const <String>[
+      'shaders/liquid_glass_render.frag',
+      'shaders/lightweight_glass.frag',
+      'shaders/interactive_indicator.frag',
+    ]) {
+      final source =
+          File(path).readAsStringSync(encoding: utf8).replaceAll('\r\n', '\n');
+      final call = source.indexOf('getAdaptiveAreaHighlightExposureProfiles(');
+      final end = source.indexOf(');', call);
+      expect(
+        source.substring(call, end),
+        contains('uHighlightHeadroom'),
+        reason: '$path 必须把 headroom 传入遮罩函数，SDR 下才能跳过 EDR 遮罩',
+      );
+    }
+  });
+
   test('Windows 有界 Shader 声明 slot 49 但把高光白点限制在 SDR', () {
     // 中文说明：宿主在所有平台都会写 slot 49。Windows 必须声明并真实使用它，
     // 防止编译器裁掉未使用 uniform 造成槽位错位；同时封顶 1.0，保证 Windows

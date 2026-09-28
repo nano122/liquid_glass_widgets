@@ -180,7 +180,7 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
 13. `GlassTabBar.bottom` 的静止视觉与独立玻璃输入胶囊对齐：
     - 底板从圆角矩形改为连续超椭圆，使顶部高光、肩部过渡与两端曲率使用同一套几何语义；
     - 移除底板 `AdaptiveGlass.grouped` 外层无收益的 `RepaintBoundary`，让底板直接注册到共享玻璃层，减少无必要的合成隔离；
-    - `AnimatedGlassIndicator.restingGlassVisibility` 提供默认关闭的静止玻璃下限，底部导航使用 `0.18`，因此选中胶囊静止时保留轻微折射与材质高光，其他组件保持原行为。
+    - `AnimatedGlassIndicator.restingGlassVisibility` 提供默认关闭的静止玻璃下限，底部导航仅在原生 iOS 使用 `0.18`（见第 15 条），因此 iOS 选中胶囊静止时保留轻微折射与材质高光，其他组件保持原行为。
 
 14. 合入官方 1.7.2（2026-09-28）时的语义迁移：
     - 目录跟随上游：`lib/src/renderer/{rendering,internal,...}` 移至
@@ -206,6 +206,18 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
       策略全部关闭，上游依赖阴影的 3 个行为测试改为断言“无阴影且无限圆角
       不崩溃”；上游新增的 5 个亮色 golden 与既有 golden 一样依赖 macOS 基线
       与阴影，在 Windows 上保持失败，不据此改动渲染。
+
+15. 安卓掉帧修复（2026-09-28，HDR 合并后约 -20 帧）：
+    - 真机 A/B（概要页 / AI 页帧率）：基线 96/72；去掉静止玻璃胶囊
+      113/82（主因）；底板恢复圆角矩形 101/73；恢复底板 RepaintBoundary
+      98/71（噪声）；强制 EDR 计算 94/70；
+    - 底部导航选中胶囊的静止玻璃仅原生 iOS 保留 `0.18`
+      （`restingIndicatorGlassVisibilityFor`），安卓 / 桌面 / Web 静止时
+      回到实色，不再常驻一层带背景采样的玻璃 Pass；
+    - 超椭圆底板保留，底板外不恢复 `RepaintBoundary`；
+    - 共享高光在 headroom ≤ 1.0 时以 uniform 门控跳过 EDR 窄遮罩与四层能量
+      分配（两次 `pow` + 六次平滑曲线），输出与完整公式逐值相等；
+    - 排查用的 `--dart-define` 临时开关已全部删除。
 
 ## 回退边界
 
