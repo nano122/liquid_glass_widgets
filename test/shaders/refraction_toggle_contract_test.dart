@@ -23,7 +23,7 @@ void main() {
 
   test('三条 Shader 路径都声明并只关闭背景折射采样偏移', () {
     final premium = File(
-      'shaders/liquid_glass_final_render.frag',
+      'shaders/liquid_glass_render.frag',
     ).readAsStringSync();
     final lightweight = File(
       'shaders/lightweight_glass.frag',
@@ -82,7 +82,7 @@ void main() {
 
   test('Dart host 为所有 Shader 显式写入折射开关 uniform', () {
     final renderObject = File(
-      'lib/src/renderer/rendering/liquid_glass_render_object.dart',
+      'lib/src/engine/rendering/liquid_glass_render_object.dart',
     ).readAsStringSync();
     final lightweight = File(
       'lib/widgets/shared/lightweight_liquid_glass.dart',

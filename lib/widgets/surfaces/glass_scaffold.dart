@@ -2,6 +2,8 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart' show defaultTargetPlatform;
 import 'package:flutter/services.dart';
 
+import '../../theme/glass_theme.dart';
+
 import '../../src/renderer/liquid_glass_renderer.dart';
 import '../../src/widgets/surfaces/dynamic_preferred_size.dart';
 import '../../types/glass_quality.dart';
@@ -198,9 +200,12 @@ class GlassScaffold extends StatelessWidget {
   /// Set this explicitly whenever you use a `background` widget and the edge
   /// fade colour matters.
   ///
-  /// When neither [background] nor [backgroundColor] is set the Scaffold
-  /// inherits `Theme.scaffoldBackgroundColor` as normal — the inner Scaffold
-  /// is **not** forced transparent.
+  /// When neither [background] nor [backgroundColor] is set, the scaffold
+  /// background colour is resolved from the glass brightness cascade (see
+  /// [GlassTheme.brightnessOf]) so that it correctly follows Material
+  /// [ThemeMode] — including [ThemeMode.dark] — rather than relying on
+  /// [CupertinoTheme], which does not read Material's [Theme] in a
+  /// [MaterialApp] (issue #289).
   final Color? backgroundColor;
 
   /// Glass settings for the page's rendering layer. See [GlassPage.settings].
@@ -583,6 +588,12 @@ class GlassScaffold extends StatelessWidget {
         ),
     ];
 
+    // Resolve brightness from the glass brightness cascade (issue #289):
+    // themeOverride.brightness → GlassThemeData.brightness → Cupertino pin →
+    // Material ThemeMode (via glassExternalBrightnessResolver) → system OS.
+    final Brightness resolvedBrightness =
+        themeOverride?.brightness ?? GlassTheme.brightnessOf(context);
+
     // Resolve the system UI overlay style for the AnnotatedRegion.
     // This ensures the status bar icons are correctly styled even on routes
     // pushed via CupertinoPageRoute (which manages its own AnnotatedRegion).
@@ -592,8 +603,9 @@ class GlassScaffold extends StatelessWidget {
     final bool useLightIcons = switch (statusBarStyle) {
       GlassStatusBarStyle.light => true,
       GlassStatusBarStyle.dark => false,
-      GlassStatusBarStyle.auto =>
-        MediaQuery.platformBrightnessOf(context) == Brightness.dark,
+      // Use the glass brightness cascade (issue #289): honours Material
+      // ThemeMode via the external resolver, not just the OS platform setting.
+      GlassStatusBarStyle.auto => resolvedBrightness == Brightness.dark,
       GlassStatusBarStyle.none => true, // doesn't matter — no region
     };
 
@@ -609,7 +621,7 @@ class GlassScaffold extends StatelessWidget {
     }
 
     // Resolve effective background: explicit widget > backgroundColor colour >
-    // null (Scaffold inherits Theme.scaffoldBackgroundColor).
+    // null.
     final Widget? effectiveBackground = background ??
         (backgroundColor != null
             ? SizedBox.expand(
@@ -617,15 +629,26 @@ class GlassScaffold extends StatelessWidget {
               )
             : null);
 
-    Widget scaffold = CupertinoPageScaffold(
-      // Only force transparent when GlassPage will render a background widget
-      // behind the scaffold. When no background is provided, null lets
-      // CupertinoPageScaffold use the CupertinoTheme default (opaque) so the
-      // page is not see-through during route transitions (issue #177).
-      backgroundColor:
-          effectiveBackground != null ? const Color(0x00000000) : null,
-      resizeToAvoidBottomInset: resizeToAvoidBottomInset ?? true,
-      child: stackWidget,
+    // Wrap in CupertinoTheme with resolved brightness so CupertinoPageScaffold
+    // and all child Cupertino widgets (GlassAppBar title, etc.) resolve their
+    // dynamic colours (like CupertinoColors.systemBackground) to the correct
+    // brightness in MaterialApp (issue #289).
+    // When no explicit background is provided, passing null for backgroundColor
+    // allows CupertinoPageScaffold to inherit CupertinoTheme.scaffoldBackgroundColor
+    // as an opaque background, preserving route transition opacity (issue #177)
+    // while adapting correctly to dark/light mode.
+    final CupertinoThemeData currentCupertinoTheme = CupertinoTheme.of(context);
+
+    Widget scaffold = CupertinoTheme(
+      data: currentCupertinoTheme.copyWith(
+        brightness: resolvedBrightness,
+      ),
+      child: CupertinoPageScaffold(
+        backgroundColor:
+            effectiveBackground != null ? const Color(0x00000000) : null,
+        resizeToAvoidBottomInset: resizeToAvoidBottomInset ?? true,
+        child: stackWidget,
+      ),
     );
 
     // Wrap in AnnotatedRegion so the status bar style sticks even on

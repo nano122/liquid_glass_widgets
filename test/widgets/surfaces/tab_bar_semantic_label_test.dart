@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/src/widgets/surfaces/tab_bar_searchable_internal.dart';
 
 import '../../shared/test_helpers.dart';
 
@@ -23,6 +24,37 @@ void main() {
   ];
 
   group('GlassTabBar.bottom semantics', () {
+    testWidgets('bar-wide gesture detector is excluded from semantics', (
+      tester,
+    ) async {
+      final semantics = tester.ensureSemantics();
+
+      await tester.pumpWidget(
+        createTestApp(
+          child: GlassTabBar.bottom(
+            tabs: const [
+              GlassTab(icon: Icon(CupertinoIcons.home), label: 'Home'),
+              GlassTab(icon: Icon(CupertinoIcons.search), label: 'Search'),
+            ],
+            selectedIndex: 0,
+            onTabSelected: (_) {},
+            maskingQuality: MaskingQuality.off,
+          ),
+        ),
+      );
+
+      final detector = tester.widget<GestureDetector>(
+        find.byWidgetPredicate(
+          (w) => w is GestureDetector && w.key == const ValueKey(0),
+        ),
+      );
+      expect(detector.excludeFromSemantics, isTrue);
+
+      await expectLater(tester, meetsGuideline(labeledTapTargetGuideline));
+
+      semantics.dispose();
+    });
+
     testWidgets('icon-only tabs announce their semanticLabel', (tester) async {
       final semantics = tester.ensureSemantics();
 
@@ -149,6 +181,35 @@ void main() {
   });
 
   group('GlassTabBar.searchable semantics', () {
+    testWidgets('bar-wide gesture detector is excluded from semantics', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: GlassTabBar.searchable(
+            tabs: const [
+              GlassTab(icon: Icon(CupertinoIcons.home), label: 'Home'),
+              GlassTab(icon: Icon(CupertinoIcons.search), label: 'Search'),
+            ],
+            selectedIndex: 0,
+            onTabSelected: (_) {},
+            maskingQuality: MaskingQuality.off,
+            searchConfig: GlassSearchBarConfig(onSearchToggle: (_) {}),
+          ),
+        ),
+      );
+
+      final detector = tester.widget<GestureDetector>(
+        find.descendant(
+          of: find.byType(SearchableTabIndicator),
+          matching: find.byWidgetPredicate(
+            (w) => w is GestureDetector && w.key == const ValueKey(0),
+          ),
+        ),
+      );
+      expect(detector.excludeFromSemantics, isTrue);
+    });
+
     testWidgets('icon-only tabs announce their semanticLabel', (tester) async {
       final semantics = tester.ensureSemantics();
 

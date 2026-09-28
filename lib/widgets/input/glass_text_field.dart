@@ -749,15 +749,9 @@ class _GlassTextFieldState extends State<GlassTextField> {
     // the ring without creating a FocusableActionDetector — preserving
     // CupertinoTextField's full ownership of the focus lifecycle.
     //
-    // The shape for the ring comes from widget.shape. LiquidRoundedRectangle
-    // only exposes borderRadius, so we approximate with a standard
-    // RoundedRectangleBorder — visually identical at this scale.
-    final ShapeBorder ringShape = widget.shape is LiquidRoundedRectangle
-        ? RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(
-              (widget.shape as LiquidRoundedRectangle).borderRadius,
-            ),
-          )
+    final shapeRadius = widget.shape.toBorderRadius();
+    final ShapeBorder ringShape = shapeRadius != null
+        ? RoundedRectangleBorder(borderRadius: shapeRadius)
         : RoundedRectangleBorder(borderRadius: BorderRadius.circular(22));
 
     // Semantics: declare as a text field so screen readers announce correctly.

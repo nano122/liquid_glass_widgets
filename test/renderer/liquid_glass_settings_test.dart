@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/constants/glass_defaults.dart';
-import 'package:liquid_glass_widgets/src/renderer/liquid_glass_settings.dart';
+import 'package:liquid_glass_widgets/src/engine/liquid_glass_settings.dart';
 
 void main() {
   group('LiquidGlassSettings', () {
@@ -538,6 +538,54 @@ void main() {
         expect(settings.topRefractionOnly, isTrue);
         expect(settings.refractiveIndex, closeTo(1.16, 1e-10));
         expect(settings.chromaticAberration, closeTo(1.6, 1e-10));
+      });
+    });
+
+    group('bodyMode', () {
+      test('defaults to GlassBodyMode.adaptive', () {
+        const s = LiquidGlassSettings();
+        expect(s.bodyMode, equals(GlassBodyMode.adaptive));
+      });
+
+      test('copyWith sets bodyMode without touching other fields', () {
+        const base = LiquidGlassSettings();
+        final copy = base.copyWith(bodyMode: GlassBodyMode.clear);
+        expect(copy.bodyMode, equals(GlassBodyMode.clear));
+        expect(copy.blur, equals(base.blur));
+        expect(copy.thickness, equals(base.thickness));
+      });
+
+      test('copyWithPinch preserves bodyMode', () {
+        const base = LiquidGlassSettings(bodyMode: GlassBodyMode.clear);
+        final pinched = base.copyWithPinch(0.5);
+        expect(pinched.bodyMode, equals(GlassBodyMode.clear));
+      });
+
+      test('lerp switches bodyMode at t=0.5', () {
+        const a = LiquidGlassSettings(bodyMode: GlassBodyMode.adaptive);
+        const b = LiquidGlassSettings(bodyMode: GlassBodyMode.clear);
+        expect(LiquidGlassSettings.lerp(a, b, 0.49).bodyMode,
+            equals(GlassBodyMode.adaptive));
+        expect(LiquidGlassSettings.lerp(a, b, 0.50).bodyMode,
+            equals(GlassBodyMode.clear));
+        expect(LiquidGlassSettings.lerp(a, b, 0.99).bodyMode,
+            equals(GlassBodyMode.clear));
+      });
+
+      test('equality includes bodyMode', () {
+        const a = LiquidGlassSettings(bodyMode: GlassBodyMode.adaptive);
+        const b = LiquidGlassSettings(bodyMode: GlassBodyMode.adaptive);
+        const c = LiquidGlassSettings(bodyMode: GlassBodyMode.clear);
+        expect(a, equals(b));
+        expect(a, isNot(equals(c)));
+      });
+
+      test('hashCode includes bodyMode', () {
+        const a = LiquidGlassSettings(bodyMode: GlassBodyMode.adaptive);
+        const b = LiquidGlassSettings(bodyMode: GlassBodyMode.adaptive);
+        const c = LiquidGlassSettings(bodyMode: GlassBodyMode.clear);
+        expect(a.hashCode, equals(b.hashCode));
+        expect(a.hashCode, isNot(equals(c.hashCode)));
       });
     });
   });

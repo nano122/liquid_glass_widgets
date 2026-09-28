@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/src/renderer/internal/liquid_glass_self_scale_scope.dart';
-import 'package:liquid_glass_widgets/src/renderer/stretch.dart';
+import 'package:liquid_glass_widgets/src/renderer/liquid_glass_self_scale_scope.dart';
+import 'package:liquid_glass_widgets/src/engine/stretch.dart';
 
 void main() {
   // ──────────────────────────────────────────────────────────────────────────
@@ -340,7 +340,10 @@ void main() {
       await tester.pump(const Duration(seconds: 1));
       await tester.pump(const Duration(seconds: 1));
       expect(scaleOf(tester), closeTo(1.0, 0.001));
-      expect(selfScaled(), isFalse, reason: 'at rest a push-back may freeze');
+      expect(selfScaled(), isFalse,
+          reason:
+              'at rest: selfScaled=false; no push-back scope active either, '
+              'so _hasScale returns false — no UV freeze, no jitter');
     });
   });
 

@@ -1,6 +1,7 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/src/renderer/glass_materialize_scope.dart';
 import 'package:liquid_glass_widgets/widgets/surfaces/shared/glass_nav_pinned_host.dart';
 
 void main() {
@@ -43,6 +44,16 @@ void main() {
         of: find.byType(GlassNavPinnedHost),
         matching: matching,
       );
+
+  /// Every [GlassMaterializeScope] above [finder], nearest first.
+  Iterable<GlassMaterializeScope> scopesAbove(Finder finder) => find
+      .ancestor(of: finder, matching: find.byType(GlassMaterializeScope))
+      .evaluate()
+      .map((e) => e.widget as GlassMaterializeScope);
+
+  /// The [GlassMaterializeScope] closest above [finder].
+  GlassMaterializeScope nearestScope(WidgetTester tester, Finder finder) =>
+      scopesAbove(finder).first;
 
   group('the automatic back button', () {
     testWidgets('a back-only cluster is still the 44pt circle', (tester) async {
@@ -163,6 +174,108 @@ void main() {
 
       expect(inHost(find.text('avatar')), findsOneWidget);
       expect(inHost(find.byType(GlassButton)), findsNothing);
+    });
+
+    testWidgets(
+        'an item that draws its own glass dissolves through the materialize '
+        'scope, not a layer', (tester) async {
+      await tester.pumpWidget(shellApp(const _Screen(title: 'Root')));
+      await settle(tester);
+      await _push(tester, _Screen(title: 'Detail', leading: [_ownCapsule()]));
+
+      // Mid cross-fade, where an ordinary item is painted under an opacity
+      // layer. A glass surface under one has no backdrop to sample, so the
+      // cluster hands the fade to the surface itself instead.
+      await tester.pump(const Duration(milliseconds: 250));
+      final scope = nearestScope(tester, inHost(find.text('capsule')));
+      expect(scope.glassProgress, lessThan(1.0));
+      expect(scope.glassProgress, greaterThan(0.0));
+      expect(scope.contentSigma, greaterThan(0.0));
+
+      await settle(tester);
+      expect(
+        nearestScope(tester, inHost(find.text('capsule'))).glassProgress,
+        1.0,
+      );
+    });
+
+    testWidgets('two items that draw their own glass take turns',
+        (tester) async {
+      await tester.pumpWidget(shellApp(_Screen(
+        title: 'Root',
+        leading: [_ownCapsule(id: #cluster)],
+      )));
+      await settle(tester);
+      await _push(
+          tester,
+          _Screen(
+            title: 'Detail',
+            backButton: false,
+            leading: [_ownCapsule(id: #cluster, label: 'pill')],
+          ));
+
+      // A matched pair of plain items cross-fades; two glass surfaces cannot,
+      // because each would sample the other. Before the swap only the
+      // outgoing one is drawn, dissolving; after it only the incoming one.
+      await tester.pump(const Duration(milliseconds: 200));
+      final outgoing = nearestScope(tester, inHost(find.text('capsule')));
+      expect(outgoing.glassProgress, lessThan(1.0));
+      expect(outgoing.glassProgress, greaterThan(0.0));
+      expect(
+          nearestScope(tester, inHost(find.text('pill'))).glassProgress, 0.0);
+
+      await tester.pump(const Duration(milliseconds: 100));
+      expect(
+        nearestScope(tester, inHost(find.text('capsule'))).glassProgress,
+        0.0,
+      );
+      final incoming = nearestScope(tester, inHost(find.text('pill')));
+      expect(incoming.glassProgress, lessThan(1.0));
+      expect(incoming.glassProgress, greaterThan(0.0));
+    });
+
+    testWidgets(
+        'plain content that hides its background keeps the cluster fade',
+        (tester) async {
+      await tester.pumpWidget(shellApp(const _Screen(title: 'Root')));
+      await settle(tester);
+      await _push(
+          tester,
+          _Screen(
+            title: 'Detail',
+            leading: [
+              const GlassBarItem.custom(
+                child: SizedBox(width: 44, height: 44, child: Text('avatar')),
+                background: GlassBarItemBackground.none,
+              ),
+              _ownCapsule(),
+            ],
+          ));
+      await tester.pump(const Duration(milliseconds: 250));
+
+      // Both sit under the group's own materialize; only the glass item gets
+      // the cluster's fade as a scope of its own. The avatar is faded at
+      // paint, as before.
+      final avatarScopes = scopesAbove(inHost(find.text('avatar')));
+      final capsuleScopes = scopesAbove(inHost(find.text('capsule')));
+      expect(capsuleScopes.length, avatarScopes.length + 1);
+    });
+
+    testWidgets(
+        'a cluster only one route has dissolves through the materialize',
+        (tester) async {
+      await tester.pumpWidget(shellApp(const _Screen(title: 'Root')));
+      await settle(tester);
+      await _push(tester, _Screen(title: 'Detail', leading: [_cancel()]));
+
+      // Inside the materialize window. The menu wrapper around every group
+      // used to install a resting scope of its own here, so the group's
+      // shell never saw this fade and popped in solid at the window's start.
+      await tester.pump(const Duration(milliseconds: 350));
+      final scope =
+          nearestScope(tester, inHost(find.byIcon(CupertinoIcons.xmark)));
+      expect(scope.glassProgress, lessThan(1.0));
+      expect(scope.glassProgress, greaterThan(0.0));
     });
 
     testWidgets('a separate item is its own shell beside a shared capsule',
@@ -403,6 +516,17 @@ void main() {
     });
   });
 }
+
+/// A custom item that is a glass surface in its own right.
+GlassBarItem _ownCapsule({Object? id, String label = 'capsule'}) =>
+    GlassBarItem.custom(
+      id: id,
+      background: GlassBarItemBackground.own,
+      child: GlassButton.custom(
+        onTap: () {},
+        child: Text(label),
+      ),
+    );
 
 GlassBarItem _cancel() => GlassBarItem.icon(
       icon: const Icon(CupertinoIcons.xmark),

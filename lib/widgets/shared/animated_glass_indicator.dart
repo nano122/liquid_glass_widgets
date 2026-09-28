@@ -85,16 +85,22 @@ class AnimatedGlassIndicator extends StatelessWidget {
   /// `chromaticAberration: 0.15` (the iOS 26 iridescent rim default) is
   /// preserved unless the caller explicitly overrides it.
   ///
-  /// Example — only change blur while keeping iOS 26 aberration:
+  /// **`blur` is always zero for indicator pills.** An indicator is a refractive
+  /// lens, not a frosted pane. Applying a [BackdropFilter] blur to a lens
+  /// samples an already-blurred image, destroying the SDF rim and specular
+  /// highlights and reducing the pill to an opaque blur blob. Any `blur` value
+  /// you pass here is silently neutralised.
+  ///
+  /// Example — increase lens refraction while keeping iOS 26 aberration:
   /// ```dart
-  /// indicatorSettings: LiquidGlassSettings(blur: 2)
+  /// indicatorSettings: LiquidGlassSettings(refractiveIndex: 1.25)
   /// ```
   ///
   /// To fully reset to the `LiquidGlassSettings()` constructor defaults,
   /// start from that and specify every field you want:
   /// ```dart
   /// indicatorSettings: AnimatedGlassIndicator.baseIndicatorSettings
-  ///     .copyWith(blur: 2, chromaticAberration: 0.0)
+  ///     .copyWith(refractiveIndex: 1.15, chromaticAberration: 0.0)
   /// ```
   final LiquidGlassSettings? settings;
 
@@ -172,11 +178,14 @@ class AnimatedGlassIndicator extends StatelessWidget {
   /// caller leaves at [LiquidGlassSettings()] defaults are filled in from
   /// here unless the caller explicitly overrides them.
   ///
+  /// Note: `blur` is always zero for indicator pills (see [settings]). This
+  /// constant reflects that: `blur: 0` is non-negotiable for a refractive lens.
+  ///
   /// Pass this as a starting point when you need partial overrides while
   /// keeping iOS 26 parity:
   /// ```dart
   /// indicatorSettings: AnimatedGlassIndicator.baseIndicatorSettings
-  ///     .copyWith(blur: 2)
+  ///     .copyWith(refractiveIndex: 1.25)
   /// ```
   static const baseIndicatorSettings = LiquidGlassSettings(
     glassColor: Color.from(
@@ -213,6 +222,13 @@ class AnimatedGlassIndicator extends StatelessWidget {
   /// equal the [LiquidGlassSettings()] default (e.g. `chromaticAberration:
   /// 0.01`), they should start from [baseIndicatorSettings] and use
   /// [LiquidGlassSettings.copyWith] directly to express the intent clearly.
+  ///
+  /// `blur` is **always neutralised** regardless of [override]. An indicator
+  /// pill is a refractive lens; applying a BackdropFilter blur causes it to
+  /// sample an already-blurred composite image, destroying the SDF-rendered
+  /// rim, specular highlights, and lens-refraction effect. Callers who
+  /// accidentally pass a surface-settings object (e.g. `indicatorSettings:
+  /// myGlass`) get correct visual output rather than an opaque blur blob.
   static LiquidGlassSettings _mergeWithBase(LiquidGlassSettings override) {
     return baseIndicatorSettings.copyWith(
       glassColor: override.glassColor != _settingsDefaults.glassColor
@@ -221,7 +237,7 @@ class AnimatedGlassIndicator extends StatelessWidget {
       thickness: override.thickness != _settingsDefaults.thickness
           ? override.thickness
           : null,
-      blur: override.blur != _settingsDefaults.blur ? override.blur : null,
+      // blur is unconditionally kept at 0 — see docstring above.
       chromaticAberration:
           override.chromaticAberration != _settingsDefaults.chromaticAberration
               ? override.chromaticAberration
@@ -529,7 +545,7 @@ class AnimatedGlassIndicator extends StatelessWidget {
           Positioned.fromRelativeRect(
             rect: rect!,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(borderRadius),
+              borderRadius: GlassDefaults.safeBorderRadius(borderRadius),
               child: BackdropFilter(
                 filter: ImageFilter.blur(
                   sigmaX: (innerBlur * backgroundOpacity)
@@ -630,7 +646,7 @@ class _OuterShadowPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     final rrect = RRect.fromRectAndRadius(
       Offset.zero & size,
-      Radius.circular(borderRadius),
+      GlassDefaults.safeCircularRadius(borderRadius),
     );
     var slack = 0.0;
     for (final s in shadows) {

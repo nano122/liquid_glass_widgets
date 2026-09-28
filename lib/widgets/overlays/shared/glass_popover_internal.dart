@@ -19,6 +19,7 @@ class _GlassPopoverState extends State<GlassPopover>
   Size? _triggerSize;
   double? _triggerBorderRadius;
   Offset _triggerGlobalPosition = Offset.zero;
+  Offset _triggerOverlayPosition = Offset.zero;
   double _horizontalOffset = 0.0;
   double _verticalOffset = 0.0;
 
@@ -126,25 +127,46 @@ class _GlassPopoverState extends State<GlassPopover>
           _morphController.value <= 0.001 &&
           _morphController.velocity.abs() < 0.5 &&
           _morphController.status != AnimationStatus.forward) {
-        _overlayController.hide();
-        // Reset per-open-cycle state so stale values from a previous position
-        // never bleed into the next open cycle.
-        // Reset the blur ramp to sharp so the next open blooms in from 0 again
-        // (it was frozen mid-value by _closePopover, not wound back).
-        _blurRamp.value = 0.0;
-        setState(() {
-          _horizontalOffset = 0.0;
-          _verticalOffset = 0.0;
-          _measuredContentHeight = null;
-          _contentMeasured = false;
-          _cachedContent = null;
-        });
+        if (SchedulerBinding.instance.schedulerPhase ==
+            SchedulerPhase.persistentCallbacks) {
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _overlayController.isShowing) {
+              _overlayController.hide();
+              _blurRamp.value = 0.0;
+              setState(() {
+                _horizontalOffset = 0.0;
+                _verticalOffset = 0.0;
+                _measuredContentHeight = null;
+                _contentMeasured = false;
+                _cachedContent = null;
+              });
+            }
+          });
+        } else {
+          _overlayController.hide();
+          // Reset per-open-cycle state so stale values from a previous position
+          // never bleed into the next open cycle.
+          // Reset the blur ramp to sharp so the next open blooms in from 0 again
+          // (it was frozen mid-value by _closePopover, not wound back).
+          _blurRamp.value = 0.0;
+          setState(() {
+            _horizontalOffset = 0.0;
+            _verticalOffset = 0.0;
+            _measuredContentHeight = null;
+            _contentMeasured = false;
+            _cachedContent = null;
+          });
+        }
       }
     });
   }
 
+  List<ModalRoute<dynamic>> _routes = const <ModalRoute<dynamic>>[];
+
   @override
   void dispose() {
+    _removeRouteListeners();
+    _routes = const [];
     _blurRamp.dispose();
     _morphController.dispose();
     super.dispose();
@@ -155,8 +177,108 @@ class _GlassPopoverState extends State<GlassPopover>
     super.didChangeDependencies();
     // Sync the reduced-motion accessibility flag to the morph controller.
     _morphController.setDisableAnimations(
-      MediaQuery.of(context).disableAnimations,
+      GlassAccessibilityData.of(context).reduceMotion,
     );
+    _updateRouteListener();
+  }
+
+  List<ModalRoute<dynamic>> _findAncestorRoutes() {
+    final routes = <ModalRoute<dynamic>>[];
+    final visited = <ModalRoute<dynamic>>{};
+    ModalRoute<dynamic>? route = ModalRoute.of(context);
+    while (route != null && visited.add(route)) {
+      routes.add(route);
+      final nav = route.navigator;
+      if (nav == null || !nav.mounted) break;
+      route = ModalRoute.of(nav.context);
+    }
+    return routes;
+  }
+
+  void _updateRouteListener() {
+    final currentRoutes = _findAncestorRoutes();
+    if (!_routesEqual(_routes, currentRoutes)) {
+      _removeRouteListeners();
+      _routes = currentRoutes;
+      _addRouteListeners();
+    }
+  }
+
+  static bool _routesEqual(
+    List<ModalRoute<dynamic>> a,
+    List<ModalRoute<dynamic>> b,
+  ) {
+    if (identical(a, b)) return true;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  void _addRouteListeners() {
+    for (final route in _routes) {
+      route.secondaryAnimation
+          ?.addStatusListener(_handleSecondaryAnimationStatus);
+      route.animation?.addStatusListener(_handlePrimaryAnimationStatus);
+    }
+  }
+
+  void _removeRouteListeners() {
+    for (final route in _routes) {
+      route.secondaryAnimation
+          ?.removeStatusListener(_handleSecondaryAnimationStatus);
+      route.animation?.removeStatusListener(_handlePrimaryAnimationStatus);
+    }
+  }
+
+  void _handleSecondaryAnimationStatus(AnimationStatus status) {
+    if (!_overlayController.isShowing) return;
+    if (status == AnimationStatus.forward) {
+      _dismissImmediately();
+    }
+  }
+
+  void _handlePrimaryAnimationStatus(AnimationStatus status) {
+    if (!_overlayController.isShowing) return;
+    if (status == AnimationStatus.reverse) {
+      _dismissImmediately();
+    }
+  }
+
+  void _dismissImmediately() {
+    if (!_overlayController.isShowing && _morphController.value == 0.0) {
+      return;
+    }
+    // Never call hide(), reset(), or setState() synchronously during
+    // persistent callbacks (e.g. declarative Navigator.pages / go_router updates).
+    if (SchedulerBinding.instance.schedulerPhase ==
+        SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _dismissImmediately();
+        }
+      });
+      return;
+    }
+    final wasClosing = _morphController.isClosing;
+    if (_overlayController.isShowing) {
+      _overlayController.hide();
+    }
+    _morphController.reset();
+    _blurRamp.stop();
+    _blurRamp.value = 0.0;
+    _horizontalOffset = 0.0;
+    _verticalOffset = 0.0;
+    _measuredContentHeight = null;
+    _contentMeasured = false;
+    _cachedContent = null;
+    if (!wasClosing) {
+      widget.onClose?.call();
+    }
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   @override
@@ -247,6 +369,8 @@ class _GlassPopoverState extends State<GlassPopover>
             ? (-_morphAlignment.y * dyMag + _verticalOffset) * rawValue
             : 0.0;
 
+        final outer = GlassMaterializeScope.maybeOf(context);
+
         return Stack(
           clipBehavior: Clip.none,
           children: [
@@ -259,18 +383,32 @@ class _GlassPopoverState extends State<GlassPopover>
                     offset: Offset(pushDx, pushDy),
                     child: Opacity(
                       opacity: triggerOpacity,
-                      child: IgnorePointer(
-                        ignoring: isPopoverBlocking,
-                        child: child, // triggerContent
+                      child: GlassMaterializeScope(
+                        glassProgress:
+                            triggerOpacity * (outer?.glassProgress ?? 1.0),
+                        contentOpacity:
+                            triggerOpacity * (outer?.contentOpacity ?? 1.0),
+                        contentSigma: outer?.contentSigma ?? 0.0,
+                        child: IgnorePointer(
+                          ignoring: isPopoverBlocking,
+                          child: child, // triggerContent
+                        ),
                       ),
                     ),
                   )
                 : triggerOpacity < 1.0
                     ? Opacity(
                         opacity: triggerOpacity,
-                        child: IgnorePointer(
-                          ignoring: isPopoverBlocking,
-                          child: child,
+                        child: GlassMaterializeScope(
+                          glassProgress:
+                              triggerOpacity * (outer?.glassProgress ?? 1.0),
+                          contentOpacity:
+                              triggerOpacity * (outer?.contentOpacity ?? 1.0),
+                          contentSigma: outer?.contentSigma ?? 0.0,
+                          child: IgnorePointer(
+                            ignoring: isPopoverBlocking,
+                            child: child,
+                          ),
                         ),
                       )
                     : isPopoverBlocking
@@ -286,18 +424,16 @@ class _GlassPopoverState extends State<GlassPopover>
             // OverlayPortal renders in the overlay layer, not in-tree, so it
             // is zero-sized here and does not affect the Stack's dimensions.
             //
-            // Target the ROOT overlay, not the nearest one. The morph is placed
-            // with absolute, root-relative coordinates (the trigger's
-            // `localToGlobal(Offset.zero)`), so it must render in the overlay
-            // that shares that coordinate space. Rendering into a *nested*
-            // overlay (e.g. a ShellRoute / nested-Navigator content area offset
-            // by a side rail) shifts the popover by that overlay's origin — the
-            // trigger's global position gets double-counted. The root overlay
-            // always coincides with the global coordinate space, so the popover
-            // lands exactly on its trigger in every embedding.
+            // Target the NEAREST overlay so the popover stays confined to the
+            // page/route where it was opened (#274). When a new route is pushed
+            // onto this or an ancestor Navigator, the destination route renders
+            // above this overlay, so the closing animation naturally remains on
+            // the outgoing page behind the transition. The trigger position is
+            // mapped into the nearest overlay's coordinate space in _openPopover
+            // to avoid drift in nested embeddings.
             OverlayPortal(
               controller: _overlayController,
-              overlayLocation: OverlayChildLocation.rootOverlay,
+              overlayLocation: OverlayChildLocation.nearestOverlay,
               overlayChildBuilder: _buildMorphingOverlay,
             ),
           ],
@@ -354,7 +490,7 @@ class _GlassPopoverState extends State<GlassPopover>
   }
 
   void _closePopover() {
-    if (!mounted) return;
+    if (!mounted || !_overlayController.isShowing) return;
     // Freeze the blur where it is for the collapse. Ramping it back down here
     // would race the morph and read as the blur "popping off" while the blob is
     // still visibly shrinking; holding it keeps the close visually coherent.
@@ -368,6 +504,7 @@ class _GlassPopoverState extends State<GlassPopover>
   }
 
   void _openPopover() {
+    _updateRouteListener();
     // context.findRenderObject() works correctly here because build() returns
     // AnimatedBuilder at the top level. AnimatedBuilder has no render object of
     // its own, so the traversal descends into the builder's returned Stack,
@@ -380,6 +517,11 @@ class _GlassPopoverState extends State<GlassPopover>
     _triggerSize = renderBox.size;
     _triggerBorderRadius = _triggerSize!.height / 2;
     _triggerGlobalPosition = renderBox.localToGlobal(Offset.zero);
+    final overlay = Overlay.maybeOf(context);
+    final overlayBox = overlay?.context.findRenderObject() as RenderBox?;
+    _triggerOverlayPosition = overlayBox != null
+        ? renderBox.localToGlobal(Offset.zero, ancestor: overlayBox)
+        : _triggerGlobalPosition;
 
     // Build the content widget exactly once for this open cycle. All
     // subsequent frames read _cachedContent; didUpdateWidget refreshes it
@@ -682,8 +824,8 @@ class _GlassPopoverState extends State<GlassPopover>
                             // over the first 40 % of the open animation,
                             // smoothly breaking the liquid bridge.
                             Positioned(
-                              left: _triggerGlobalPosition.dx + state.pushDx,
-                              top: _triggerGlobalPosition.dy + state.pushDy,
+                              left: _triggerOverlayPosition.dx + state.pushDx,
+                              top: _triggerOverlayPosition.dy + state.pushDy,
                               child: Transform.scale(
                                 scale: state.anchorScale,
                                 child: GlassContainer(
@@ -702,12 +844,12 @@ class _GlassPopoverState extends State<GlassPopover>
 
                             // ── Blob B: Popover body ─────────────────────────
                             Positioned(
-                              left: _triggerGlobalPosition.dx +
+                              left: _triggerOverlayPosition.dx +
                                   tw / 2.0 +
                                   state.currentDx -
                                   currentWidth / 2.0 +
                                   (_horizontalOffset * clampedValue),
-                              top: _triggerGlobalPosition.dy +
+                              top: _triggerOverlayPosition.dy +
                                   th / 2.0 +
                                   state.currentDy -
                                   currentHeight / 2.0 +

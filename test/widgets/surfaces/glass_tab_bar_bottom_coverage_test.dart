@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/src/widgets/surfaces/tab_bar_bottom_internal.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
       home: Scaffold(body: LiquidGlassWidgets.wrap(child: child)),
@@ -106,6 +107,40 @@ void main() {
       ));
       await tester.pump();
       expect(find.byType(SizedBox), findsWidgets);
+    });
+
+    testWidgets(
+        'shadow layer renders with infinite barBorderRadius without collapsing',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: ThemeData(brightness: Brightness.light),
+          home: Scaffold(
+            body: AdaptiveLiquidGlassLayer(
+              settings: const LiquidGlassSettings(shadowElevation: 8),
+              child: SizedBox(
+                height: 100,
+                child: GlassTabBar.bottom(
+                  tabs: [_tab('Home'), _tab('Profile')],
+                  selectedIndex: 0,
+                  onTabSelected: (_) {},
+                  barBorderRadius: double.infinity,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(GlassTabBar), findsOneWidget);
+
+      final state = tester.state<TabIndicatorState>(find.byType(TabIndicator));
+      final overlay =
+          state.buildShadowOverlay(tester.element(find.byType(TabIndicator)));
+      // 中文说明：Poiesis 统一关闭玻璃外投影，effectiveShadow 恒为空，因此
+      // 无限圆角下也不应生成阴影层；上游原断言为 isNotNull。
+      expect(overlay, isNull);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('standard quality bar renders', (tester) async {
@@ -331,6 +366,60 @@ void main() {
         inverse: true,
       );
       expect(base.shouldReclip(diffInverse), isTrue);
+    });
+
+    test('getClip right overdrag keeps edge icon inside clip window (#328)',
+        () {
+      // 3 tabs on a 390 px bar → tabWidth = 130, availableWidth = 260.
+      // Maximum right overdrag: alignment.x = 1.6 (rubber-band cap).
+      // rawLeft = (1.6 + 1) / 2 * 260 = 338
+      // Without fix: clip.left = 338, clip.right = 338 + 130 = 468
+      //   → last-tab icon at [260, 390] is only partly covered (left 78px cut)
+      // With fix:    clip.left = 260, clip.right = 468
+      //   → last-tab icon at [260, 390] is fully inside the clip
+      const size = Size(390, 64);
+      final clipper = JellyClipper(
+        itemCount: 3,
+        alignment: const Alignment(1.6, 0), // max right overdrag
+        thickness: 1.0,
+        expansion: EdgeInsets.zero,
+        transform: Matrix4.identity(),
+        borderRadius: 24.0,
+      );
+      final path = clipper.getClip(size);
+      // The last tab's icon centre (x = 325) must be inside the clip.
+      expect(path.contains(const Offset(325, 32)), isTrue);
+      // bounds.left is the padded left edge (baseRect.left + 4 = 260 + 4 = 264).
+      // It must be no more than availableWidth + 4 (the padding offset).
+      final bounds = path.getBounds();
+      expect(bounds.left, lessThanOrEqualTo(264.0));
+    });
+
+    test('getClip left overdrag keeps first icon inside clip window (#328)',
+        () {
+      // 3 tabs on a 390 px bar.
+      // Maximum left overdrag: alignment.x = -1.6.
+      // rawLeft = (-1.6 + 1) / 2 * 260 = -78
+      // Without fix: clip.left = -78, clip.right = -78 + 130 = 52
+      //   → first-tab icon at [0, 130]: right portion [52, 130] is outside clip
+      // With fix:    clip.left = -78, clip.right = max(52, 130) = 130
+      //   → first-tab icon at [0, 130] is fully inside the clip
+      const size = Size(390, 64);
+      final clipper = JellyClipper(
+        itemCount: 3,
+        alignment: const Alignment(-1.6, 0), // max left overdrag
+        thickness: 1.0,
+        expansion: EdgeInsets.zero,
+        transform: Matrix4.identity(),
+        borderRadius: 24.0,
+      );
+      final path = clipper.getClip(size);
+      // The first tab's icon centre (x = 65) must be inside the clip.
+      expect(path.contains(const Offset(65, 32)), isTrue);
+      // bounds.right is the padded right edge (baseRect.right - 4 = 130 - 4 = 126).
+      // It must be at least tabWidth - 4 (the right pad of the first tab slot).
+      final bounds = path.getBounds();
+      expect(bounds.right, greaterThanOrEqualTo(126.0));
     });
   });
 }

@@ -26,11 +26,12 @@ part of '../glass_modal_sheet.dart';
 /// The widget a [GlassModalSheet] morphs out of, and the channel that empties
 /// it while the morph is in flight.
 ///
-/// An opaque token: it carries no members a caller can use. [GlassMorphTrigger]
-/// creates one, hands it to its builder, and disposes it; callers pass it
-/// straight to [GlassModalSheet.show] as `morphFrom` and never touch it
-/// otherwise. The constructor is private so one cannot be made by hand — an
-/// anchor with no trigger behind it has nothing to empty.
+/// Close to an opaque token: [GlassMorphTrigger] creates one, hands it to its
+/// builder, and disposes it; callers pass it straight to [GlassModalSheet.show]
+/// as `morphFrom` and never touch it otherwise. All it reports back is
+/// [isPresenting], for chrome that has to know whether the trigger it drew is
+/// currently standing in for a sheet. The constructor is private so one cannot
+/// be made by hand — an anchor with no trigger behind it has nothing to empty.
 ///
 /// ## Why a token rather than a bare [GlobalKey]
 ///
@@ -61,6 +62,20 @@ class GlassMorphAnchor {
   bool _emptied = false;
   _MorphHandback? _handback;
   bool _disposed = false;
+
+  /// Whether the trigger is currently emptied for a presented sheet.
+  ///
+  /// True from the frame the sheet's morph starts until the droplet is caught
+  /// on dismissal — or, if the route is torn down without the closing morph,
+  /// until the trigger is restored. What the pinned chrome reads to keep a
+  /// hoisted capsule through the sheet presented out of it.
+  bool get isPresenting => _emptied;
+
+  /// Notifies when [isPresenting] changes.
+  ///
+  /// Deferred past a build in progress exactly as the owning trigger is
+  /// notified, so a listener may rebuild from it.
+  Listenable get presentationChanges => _notifier;
 
   /// The trigger's rect in global coordinates, or null when it is not currently
   /// laid out.
@@ -417,14 +432,16 @@ class SheetMorphGeometry {
   /// The detent a swipe-to-dismiss drag falls away from.
   ///
   /// Mirrors the pivot `_calculateMetrics` drags from: the peek floor when
-  /// there is one, the half detent otherwise.
+  /// there is one, otherwise the lowest enabled visible detent.
   ///
   /// Deliberately *not* [SheetGeometry.minState], which is
   /// [GlassSheetState.hidden] for the common dismissible peek-less sheet —
   /// hidden is the position a swipe drags the sheet *to*, and measuring travel
   /// from it would read every drag as zero.
   static GlassSheetState dismissPivotState(SheetGeometry geometry) =>
-      geometry.enablePeek ? GlassSheetState.peek : GlassSheetState.half;
+      geometry.orderedStates.firstWhere(
+        (state) => state != GlassSheetState.hidden,
+      );
 
   /// How far the sheet has been dragged below its lowest detent, as a fraction
   /// of screen height.
@@ -1009,7 +1026,8 @@ class _GlassSheetMorphPresenterState extends State<GlassSheetMorphPresenter>
     // opens the moment it mounts, so the flag has to land BEFORE the spring
     // starts — otherwise the first presentation of every session animates at
     // full length with Reduce Motion on.
-    _morph.setDisableAnimations(MediaQuery.of(context).disableAnimations);
+    _morph
+        .setDisableAnimations(GlassAccessibilityData.of(context).reduceMotion);
     // The sheet mounts as this presenter's child, so it has not attached to
     // the controller yet on the first pass — bind once the frame is up, and
     // re-check on morph ticks in case the sheet's state is ever rebuilt.

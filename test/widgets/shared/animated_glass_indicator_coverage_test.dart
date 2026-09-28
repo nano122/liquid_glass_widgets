@@ -68,14 +68,25 @@ void main() {
   // true branch of at least one field comparison inside _mergeWithBase.
 
   group('AnimatedGlassIndicator — _mergeWithBase (settings != null)', () {
-    testWidgets('non-default blur overrides baseIndicatorSettings.blur',
+    testWidgets(
+        'blur passed via settings is always neutralised — effectiveBlur == 0',
         (tester) async {
+      // Regression: _mergeWithBase previously forwarded override.blur when it
+      // differed from the LiquidGlassSettings() default. This caused the pill
+      // to receive a non-zero BackdropFilter blur, smearing underlying content
+      // and destroying the SDF rim/specular highlights (the "blur blob" bug).
+      // blur must ALWAYS be zero on the resolved indicator settings.
       await tester.pumpWidget(_wrap(_make(
-        thickness: 0.5, // > 0.01 → full build path
-        settings: const LiquidGlassSettings(blur: 10), // blur != default (5)
+        thickness: 0.5,
+        settings: const LiquidGlassSettings(blur: 20), // large caller blur
       )));
       await tester.pump();
-      expect(tester.takeException(), isNull);
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(
+        glass.settings.effectiveBlur,
+        0.0,
+        reason: 'Indicator lens must never apply BackdropFilter blur',
+      );
     });
 
     testWidgets('non-default chromaticAberration overrides base value',
@@ -497,6 +508,59 @@ void main() {
       // Before the fix this returned SizedBox.expand() — no DecoratedBox.
       expect(find.byType(DecoratedBox), findsWidgets);
       expect(tester.takeException(), isNull);
+    });
+  });
+  // ── Blur-blob regression ─────────────────────────────────────────────────
+  // Verifies that no matter what `blur` the caller passes via indicatorSettings,
+  // the resolved GlassEffect always has effectiveBlur == 0.
+  //
+  // Root cause (fixed): _mergeWithBase forwarded override.blur when it differed
+  // from the LiquidGlassSettings() constructor default (which is non-zero in
+  // older defaults). The indicator pill is a refractive lens, not a frosted
+  // pane — blur on the indicator triggers BackdropFilter on top of the SDF
+  // pill, sampling an already-blurred backdrop and destroying the rim.
+
+  group(
+      'AnimatedGlassIndicator — blur is always zero on indicator '
+      '(blur-blob regression)', () {
+    testWidgets(
+        'surface settings blur=20 passed as indicatorSettings → effectiveBlur 0',
+        (tester) async {
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.8,
+        settings: const LiquidGlassSettings(blur: 20),
+      )));
+      await tester.pump();
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.effectiveBlur, 0.0);
+    });
+
+    testWidgets(
+        'indicatorSettings with blur=3 (demo default slider) → effectiveBlur 0',
+        (tester) async {
+      // Mimics the quality_comparison_demo scenario where _kGlass.blur == 3.0
+      // was accidentally forwarded to the premium GlassSegmentedControl.
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.8,
+        settings: const LiquidGlassSettings(blur: 3),
+      )));
+      await tester.pump();
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.effectiveBlur, 0.0);
+    });
+
+    testWidgets(
+        'null indicatorSettings → baseIndicatorSettings used directly '
+        '→ effectiveBlur 0', (tester) async {
+      // No indicatorSettings at all: must resolve to baseIndicatorSettings
+      // which has blur: 0 by design.
+      await tester.pumpWidget(_wrap(_make(
+        thickness: 0.8,
+        settings: null,
+      )));
+      await tester.pump();
+      final glass = tester.widget<GlassEffect>(find.byType(GlassEffect).first);
+      expect(glass.settings.effectiveBlur, 0.0);
     });
   });
 }

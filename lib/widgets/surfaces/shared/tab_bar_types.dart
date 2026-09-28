@@ -112,10 +112,21 @@ class JellyClipper extends CustomClipper<Path> {
     final tabWidth = size.width / itemCount;
     final availableWidth = size.width - tabWidth;
 
-    // Map alignment (-1 to 1) to horizontal offset
-    final left = (alignment.x + 1) / 2 * availableWidth;
+    // Map alignment (-1 to 1) to horizontal offset.
+    final rawLeft = (alignment.x + 1) / 2 * availableWidth;
 
-    final baseRect = Rect.fromLTWH(left, 0, tabWidth, size.height);
+    // Overdrag guard: when the user rubber-bands past the first or last tab
+    // (alignment.x outside [-1, 1]), the raw offset would slide the clip
+    // window off the edge tab's icon entirely. Instead, clamp the leading edge
+    // to the bar boundary and let the trailing edge extend into overflow — the
+    // outer glass shape (AdaptiveGlass / _barShape) trims the overflow — so
+    // the icon stays fully visible and the pill reads as pressing elastically
+    // against the wall rather than vanishing off the edge (#328).
+    final left = rawLeft.clamp(double.negativeInfinity, availableWidth);
+    final right = (rawLeft + tabWidth).clamp(tabWidth, double.infinity);
+
+    final baseRect = Rect.fromLTRB(left, 0, right, size.height);
+
     final paddedRect = Rect.fromLTRB(
       baseRect.left + 4.0,
       baseRect.top + 4.0,

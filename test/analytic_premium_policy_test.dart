@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/src/renderer/liquid_shape.dart';
+import 'package:liquid_glass_widgets/src/engine/liquid_shape.dart';
 import 'package:liquid_glass_widgets/types/glass_quality.dart';
 import 'package:liquid_glass_widgets/widgets/shared/glass_effect.dart';
 

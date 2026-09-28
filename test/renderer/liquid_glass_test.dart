@@ -8,7 +8,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:liquid_glass_widgets/src/renderer/liquid_glass.dart';
+import 'package:liquid_glass_widgets/src/engine/liquid_glass.dart';
 
 import '../shared/test_helpers.dart';
 
@@ -19,6 +19,26 @@ void main() {
         const LiquidGlass(shape: LiquidOval(), child: SizedBox()),
         isA<Widget>(),
       );
+    });
+
+    testWidgets('renders cleanly with bodyMode: GlassBodyMode.clear',
+        (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: LiquidGlass.withOwnLayer(
+              shape: const LiquidOval(),
+              settings: const LiquidGlassSettings(
+                bodyMode: GlassBodyMode.clear,
+                blur: 0,
+                glassColor: Color(0xD9C3E0F5),
+              ),
+              child: const SizedBox(width: 100, height: 100),
+            ),
+          ),
+        ),
+      );
+      expect(find.byType(LiquidGlass), findsOneWidget);
     });
 
     group('LiquidRoundedSuperellipse', () {

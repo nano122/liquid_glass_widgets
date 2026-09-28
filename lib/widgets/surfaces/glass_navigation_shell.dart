@@ -2,8 +2,9 @@ import 'package:flutter/scheduler.dart' show SchedulerPhase;
 import 'package:flutter/widgets.dart';
 
 import '../../constants/glass_defaults.dart';
-import '../../src/renderer/liquid_glass_settings.dart';
+import '../../src/engine/liquid_glass_settings.dart';
 import '../effects/glass_materialize.dart';
+import '../overlays/glass_modal_sheet.dart';
 import 'glass_bar_item.dart';
 import 'shared/glass_nav_pinned_host.dart';
 
@@ -20,6 +21,13 @@ class GlassNavBarRegistration {
     required this.showsBackButton,
     this.onBack,
     this.buttonSettings,
+    @Deprecated(
+      'A hoisted sheet item presents out of the hoisted capsule; the tap is '
+      'no longer handed back.',
+    )
+    this.presentSheet,
+    this.horizontalInset,
+    this.platformViewBackdrop = false,
   });
 
   /// The trailing cluster items for this route.
@@ -40,6 +48,39 @@ class GlassNavBarRegistration {
 
   /// Glass settings applied to this route's pinned chrome.
   final LiquidGlassSettings? buttonSettings;
+
+  /// No longer called: a [GlassBarItem.sheet] presents out of the hoisted
+  /// capsule itself, which the shell keeps through the presentation. See
+  /// [GlassNavigationShellState.holdForSheet].
+  @Deprecated(
+    'A hoisted sheet item presents out of the hoisted capsule; the tap is no '
+    'longer handed back.',
+  )
+  final void Function(GlassBarSheetItem item)? presentSheet;
+
+  /// Inset from each screen edge to the pinned chrome, in logical pixels.
+  ///
+  /// Defaults to [GlassNavPinnedMetrics.horizontalPadding], which is what
+  /// [GlassAppBar] insets its own chrome by — so a bar the package draws at
+  /// both ends already agrees with itself and passes nothing.
+  ///
+  /// A bar the app draws is the case for it. The chrome hoists and hands back
+  /// on its own schedule — a presented sheet gives it to the route, a
+  /// transition takes it away again — and each hand-over is invisible only
+  /// while the two renderings land on the same guide. A bar aligned to its
+  /// app's page gutter rather than to this default passes that gutter here.
+  final double? horizontalInset;
+
+  /// Whether the pinned chrome floats over a native platform view.
+  ///
+  /// The shell draws a hoisted cluster with its own [GlassButton], and the
+  /// shader that button uses reads a captured backdrop the platform view is
+  /// never part of — so over a map or a video the capsule has nothing to
+  /// refract and renders inert, whatever [buttonSettings] asks for. Only a
+  /// live `BackdropFilter` samples the composited view, and this is what
+  /// routes the shell's copy there, exactly as [GlassButton.platformViewBackdrop]
+  /// does for the bar's own.
+  final bool platformViewBackdrop;
 
   /// The tappable items in [actions], with spacers removed.
   List<GlassBarActionItem> get actionItems =>
@@ -131,7 +172,7 @@ class GlassNavigationShell extends StatefulWidget {
 /// so the shell always knows which route is on top and which sits beneath it
 /// mid-transition.
 class GlassNavigationShellState extends State<GlassNavigationShell>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   /// Registrations keyed by route, in registration order.
   final Map<ModalRoute<dynamic>, GlassNavBarRegistration> _registry =
       <ModalRoute<dynamic>, GlassNavBarRegistration>{};
@@ -199,6 +240,56 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
   /// Chrome progress the commit animation starts from.
   double _commitExitStart = 1.0;
 
+  // ---------------------------------------------------------------------------
+  // The chrome's own clock
+  // ---------------------------------------------------------------------------
+  // The choreography is timed against a route whose animation value is linear
+  // in time, which is what a duration-driven controller gives it. A route
+  // running a `Simulation` instead — a spring — reports a value that covers
+  // most of its travel in the first fraction of the flight and then creeps,
+  // so following it squeezed the whole morph into a few frames while the page
+  // was still moving. Such a route's chrome plays on its own controller over
+  // the route's declared `transitionDuration` (or `reverseTransitionDuration`)
+  // instead, which is the morph its duration promised. A duration-driven
+  // route is left on its own value, so it reads exactly as before; a
+  // back-swipe still scrubs the route's value, and a committed swipe is
+  // [_commitExit]'s.
+
+  /// Plays a sprung push or pop's chrome over the route's declared duration.
+  late final AnimationController _clock = AnimationController(vsync: this);
+
+  /// The route and direction [_clock] is playing, or null at rest.
+  ModalRoute<dynamic>? _clockRoute;
+  AnimationStatus? _clockStatus;
+
+  /// Where the current run starts from, held until the deferred start.
+  ///
+  /// A run begins from wherever the chrome already is, so a pop that
+  /// interrupts a push carries on from mid-morph rather than restarting at
+  /// the far end. Read in place of the controller while [_clockPending].
+  double _clockFrom = 0.0;
+
+  /// Whether a run has been scheduled but the controller not yet started.
+  bool _clockPending = false;
+
+  /// Each registered route's status listener, so it can be removed again.
+  final Map<ModalRoute<dynamic>, AnimationStatusListener> _clockListeners =
+      <ModalRoute<dynamic>, AnimationStatusListener>{};
+
+  // ---------------------------------------------------------------------------
+  // Sheet hold
+  // ---------------------------------------------------------------------------
+  // A presentation hands the chrome back to its route, because the shell draws
+  // above the Navigator and cannot get beneath a sheet. The capsule a sheet
+  // morphs out of is the exception: the morph has emptied it, so nothing of it
+  // is drawn above the sheet — and handing it back would take the anchor out
+  // from under the droplet mid-flight, and leave the route's copy painted
+  // under the barrier where the emptied capsule should be. That one group
+  // stays hoisted for as long as its trigger is standing in for the sheet.
+
+  /// The capsule kept hoisted through the sheet presented out of it, or null.
+  _SheetHold? _sheetHold;
+
   bool _pinningSupported = false;
 
   /// Whether pinning is currently active.
@@ -220,6 +311,12 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
         // starting from a controller still parked at 1.0.
         _commitExit.reset();
         _scheduleNotify();
+      });
+    _clock
+      ..addListener(_tick.notify)
+      // The frame the run ends is the frame the chrome settles.
+      ..addStatusListener((status) {
+        if (status == AnimationStatus.completed) _scheduleNotify();
       });
   }
 
@@ -272,6 +369,9 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     if (existing == null) {
       _listenTo(route.animation);
       _listenTo(route.secondaryAnimation);
+      final listener =
+          _clockListeners[route] = (status) => _onRouteStatus(route, status);
+      route.animation?.addStatusListener(listener);
     }
     _scheduleNotify();
   }
@@ -279,9 +379,61 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
   /// Removes [route] from the registry.
   void unregister(ModalRoute<dynamic> route) {
     if (_registry.remove(route) == null) return;
+    if (identical(_sheetHold?.route, route)) _dropSheetHold();
     _unlisten(route.animation);
     _unlisten(route.secondaryAnimation);
+    final listener = _clockListeners.remove(route);
+    if (listener != null) route.animation?.removeStatusListener(listener);
+    if (identical(_clockRoute, route)) _clockRoute = null;
     _scheduleNotify();
+  }
+
+  /// Starts [_clock] when [route]'s own transition does, if it needs one.
+  ///
+  /// A push or pop under a gesture is the swipe's — its rebound and commit
+  /// are handled where the hold is. A run begins from wherever the chrome
+  /// already is, so a pop that interrupts a push carries on from mid-morph
+  /// rather than restarting at the far end.
+  void _onRouteStatus(ModalRoute<dynamic> route, AnimationStatus status) {
+    if (status != AnimationStatus.forward &&
+        status != AnimationStatus.reverse) {
+      return;
+    }
+    if (route.navigator?.userGestureInProgress ?? false) return;
+    if (identical(_clockRoute, route) && _clockStatus == status) return;
+    // Only a route on a simulation needs the clock; `createSimulation` is
+    // the hook it overrides to run one.
+    final forward = status == AnimationStatus.forward;
+    if (route.createSimulation(forward: forward) == null) {
+      if (identical(_clockRoute, route)) _clockRoute = null;
+      return;
+    }
+    final current = identical(_clockRoute, route)
+        ? _clockProgress()
+        : route.animation?.value ?? 0.0;
+    _clockRoute = route;
+    _clockStatus = status;
+    _clockFrom = forward ? current : 1.0 - current;
+    _clock
+      ..stop()
+      ..duration =
+          forward ? route.transitionDuration : route.reverseTransitionDuration;
+    // A page-based Navigator starts a route inside the build phase, and
+    // starting a controller notifies synchronously. Defer exactly as a tick
+    // does; the frame in between reads the start value.
+    final phase = WidgetsBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks ||
+        phase == SchedulerPhase.midFrameMicrotasks) {
+      _clockPending = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !identical(_clockRoute, route)) return;
+        _clockPending = false;
+        _clock.forward(from: _clockFrom);
+      });
+    } else {
+      _clockPending = false;
+      _clock.forward(from: _clockFrom);
+    }
   }
 
   /// Listens to both the value and the status of [animation].
@@ -303,7 +455,11 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     animation.removeStatusListener(_onAnimationStatus);
   }
 
-  void _onAnimationTick() => _tick.notify();
+  // A route wiring its secondary animation (`ProxyAnimation.parent=` inside
+  // `didChangeNext`) notifies value listeners synchronously, and for a
+  // page-based Navigator that runs inside `didUpdateWidget` — the build
+  // phase — so the tick has to defer exactly as a status change does.
+  void _onAnimationTick() => _scheduleNotify();
 
   void _onAnimationStatus(AnimationStatus status) {
     // Not while a finger is down: several routes' animations are listened to
@@ -390,11 +546,94 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
   /// topmost one: mid-transition the chrome is a blend of two routes' items,
   /// so the outgoing route has to keep its placeholder or its own buttons
   /// would slide out from underneath the pinned copy.
+  ///
+  /// False under a presentation, even while [presentingSheetItem] is set: the
+  /// chrome as a whole has been handed back, and only that item's capsule is
+  /// still the shell's.
   bool isHoisting(ModalRoute<dynamic> route) {
     if (!isActive || !_registry.containsKey(route)) return false;
     final ordered = _orderedEntries;
     if (ordered.isEmpty) return false;
     return !_isPresentedOver(ordered.first.key);
+  }
+
+  /// The [GlassBarItem.sheet] whose capsule the shell is keeping hoisted for
+  /// [route] through the sheet presented out of it, or null.
+  ///
+  /// Non-null only while [isHoisting] is false for the presentation: the rest
+  /// of the chrome is the route's to draw, and the slot this item's group
+  /// occupies stays the placeholder it already had, since the shell still
+  /// draws that capsule and the morph has emptied it. It reads null again the
+  /// frame the sheet is dismissed, when the whole chrome hoists back and the
+  /// droplet is still on its way home. The instance is the one that was
+  /// tapped, so a bar that rebuilds its items compares by `id`.
+  GlassBarSheetItem? presentingSheetItem(ModalRoute<dynamic> route) {
+    final hold = _sheetHold;
+    if (hold == null || !identical(hold.route, route) || isHoisting(route)) {
+      return null;
+    }
+    return hold.item;
+  }
+
+  /// Keeps [item]'s capsule hoisted through the sheet about to be presented
+  /// out of [anchor].
+  ///
+  /// Called by the pinned host on the tap, before the item presents, so the
+  /// hold is in place by the frame the sheet's route lands and the group is
+  /// never unmounted from under the droplet. The hold is inert until a route
+  /// is presented over [route] — the chrome stays hoisted exactly as it was —
+  /// so the presenter may take as long as it needs to get there: measuring
+  /// the sheet's content offscreen, awaiting a fetch. A tap that presents
+  /// nothing leaves a hold that the next tap, presentation or unregistration
+  /// of the route replaces. One whose presentation arrives with the anchor
+  /// unemptied — a dialog, a sheet shown without the morph — is dropped at
+  /// the end of that presentation's first frame, and the chrome hands back as
+  /// for any other presentation. So is one whose presentation has gone.
+  void holdForSheet(
+    ModalRoute<dynamic> route,
+    GlassBarSheetItem item,
+    GlassMorphAnchor anchor,
+  ) {
+    _dropSheetHold();
+    _sheetHold = _SheetHold(route: route, item: item, anchor: anchor);
+    anchor.presentationChanges.addListener(_onSheetPresentationChanged);
+  }
+
+  /// Whether [hold] keeps its capsule through the presentation now over its
+  /// route.
+  ///
+  /// True once the anchor has been emptied. Before that, the presenter empties
+  /// the trigger during the sheet route's first build, and this may resolve
+  /// earlier in the same frame — so the first presented-over resolve keeps
+  /// the capsule and asks again at the end of the frame: still full then
+  /// means no morph is coming out of it, and the hold is dropped.
+  bool _sheetHoldClaimed(_SheetHold hold) {
+    if (hold.anchor.isPresenting) return true;
+    if (hold.presented) return false;
+    hold.presented = true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted ||
+          !identical(_sheetHold, hold) ||
+          hold.anchor.isPresenting) {
+        return;
+      }
+      _dropSheetHold();
+      _scheduleNotify();
+    });
+    return true;
+  }
+
+  void _onSheetPresentationChanged() {
+    final hold = _sheetHold;
+    if (hold != null && !hold.anchor.isPresenting) _dropSheetHold();
+    _scheduleNotify();
+  }
+
+  void _dropSheetHold() {
+    final hold = _sheetHold;
+    if (hold == null) return;
+    hold.anchor.presentationChanges.removeListener(_onSheetPresentationChanged);
+    _sheetHold = null;
   }
 
   /// Whether a route this shell cannot rank has been *presented* over [route].
@@ -461,6 +700,12 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     return progress;
   }
 
+  /// [_clock]'s run as chrome progress: 0 to 1 on a push, 1 to 0 on a pop.
+  double _clockProgress() {
+    final t = _clockPending ? _clockFrom : _clock.value;
+    return _clockStatus == AnimationStatus.forward ? t : 1.0 - t;
+  }
+
   /// Drops the gesture hold once a transition is over.
   ///
   /// Without this the next push would be re-timed against a release point
@@ -496,17 +741,49 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     if (ordered.isEmpty) return null;
 
     final top = ordered.first;
+    final below = ordered.length > 1 ? ordered[1] : null;
+    final from = below?.value ??
+        const GlassNavBarRegistration(
+          actions: <GlassBarItem>[],
+          showsBackButton: false,
+        );
 
     // Nothing drawn above the `Navigator` can be underneath a route presented
     // into it, so the shell stands down and the registrants take their chrome
-    // back for as long as one is up.
-    if (_isPresentedOver(top.key)) return null;
-
-    final below = ordered.length > 1 ? ordered[1] : null;
+    // back for as long as one is up — all but the capsule a sheet is morphing
+    // out of, which stays up at rest on its own.
+    if (_isPresentedOver(top.key)) {
+      final hold = _sheetHold;
+      if (hold == null ||
+          !identical(hold.route, top.key) ||
+          !_sheetHoldClaimed(hold)) {
+        return null;
+      }
+      return GlassNavPinnedState(
+        from: from,
+        to: top.value,
+        progress: 1.0,
+        coverage: 0.0,
+        settled: true,
+        topRoute: top.key,
+        transition: widget.effectTransition,
+        presenting: hold.item,
+      );
+    }
+    // A hold is for one presentation; with that gone, so is the hold. Dropped
+    // here rather than on the route's pop so a trigger unmounted while the
+    // sheet was up cannot leave one behind. One still waiting for its
+    // presentation to arrive is left alone.
+    if (_sheetHold?.presented ?? false) _dropSheetHold();
 
     // Progress of the top route's own entrance: 1 at rest, 0 when it has just
     // been pushed, and scrubbed by the interactive back-swipe during a pop.
-    var progress = top.key.animation?.value ?? 1.0;
+    // A completed route is at 1 whatever its controller last reported — a
+    // simulation stops inside a tolerance of its end, not on it.
+    final status = top.key.animation?.status ?? AnimationStatus.completed;
+    var progress = status == AnimationStatus.completed
+        ? 1.0
+        : top.key.animation?.value ?? 1.0;
 
     // A route's `animation` is a ProxyAnimation that reports itself complete
     // at 1.0 until the navigator attaches the real controller in `didPush`,
@@ -523,7 +800,7 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     if (below != null &&
         progress == 1.0 &&
         _coverageOf(below.key) == 0.0 &&
-        top.key.animation?.status == AnimationStatus.completed) {
+        status == AnimationStatus.completed) {
       progress = 0.0;
     }
 
@@ -539,6 +816,16 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     // once that animation has finished.
     final userGesture = top.key.navigator?.userGestureInProgress ?? false;
 
+    // A push or pop under no gesture plays on [_clock], started by
+    // [_onRouteStatus]. The run outlives the route if the route's own value
+    // got there first; the chrome is not settled until it has.
+    final running =
+        status == AnimationStatus.forward || status == AnimationStatus.reverse;
+    final clocked = identical(_clockRoute, top.key) &&
+        !userGesture &&
+        (running || _clockPending || _clock.isAnimating);
+    if (clocked) progress = _clockProgress();
+
     // Whether the chrome may be tapped. Deliberately not derived from
     // `progress`: a pop starts at 1.0 and a back-swipe sits there until the
     // finger moves, so by value alone a transition that is very much running
@@ -546,9 +833,9 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     // are what actually tell the two apart, and `isCurrent` covers a route
     // that something unregistered has been pushed over.
     final settled = top.key.isCurrent &&
-        (top.key.animation?.status ?? AnimationStatus.completed) ==
-            AnimationStatus.completed &&
-        !userGesture;
+        status == AnimationStatus.completed &&
+        !userGesture &&
+        !(clocked && (_clockPending || _clock.isAnimating));
 
     // Whether the finger is still down with the pop not yet committed — which
     // is narrower than [userGesture], and is what the chrome hold needs.
@@ -577,16 +864,12 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
     // controller at whatever value the finger dictates without ever entering
     // AnimationStatus.reverse.
     final popping = !settled &&
-        ((top.key.animation?.status ?? AnimationStatus.completed) ==
-                AnimationStatus.reverse ||
-            userGesture);
+        (status == AnimationStatus.reverse ||
+            userGesture ||
+            (clocked && _clockStatus == AnimationStatus.reverse));
 
     final state = GlassNavPinnedState(
-      from: below?.value ??
-          const GlassNavBarRegistration(
-            actions: <GlassBarItem>[],
-            showsBackButton: false,
-          ),
+      from: from,
       to: top.value,
       progress: committing
           ? heldAtCommit.clamp(0.0, 1.0)
@@ -596,6 +879,7 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
       popping: popping,
       topRoute: top.key,
       transition: widget.effectTransition,
+      holdForSheet: (item, anchor) => holdForSheet(top.key, item, anchor),
     );
 
     if (committing) {
@@ -624,7 +908,13 @@ class GlassNavigationShellState extends State<GlassNavigationShell>
       animation.removeStatusListener(_onAnimationStatus);
     }
     _listened.clear();
+    for (final entry in _clockListeners.entries) {
+      entry.key.animation?.removeStatusListener(entry.value);
+    }
+    _clockListeners.clear();
+    _dropSheetHold();
     _commitExit.dispose();
+    _clock.dispose();
     _tick.dispose();
     super.dispose();
   }
@@ -674,6 +964,31 @@ class _GlassNavigationShellScope extends InheritedWidget {
   @override
   bool updateShouldNotify(_GlassNavigationShellScope oldWidget) =>
       state != oldWidget.state;
+}
+
+/// A capsule kept hoisted through the sheet presented out of it.
+class _SheetHold {
+  _SheetHold({
+    required this.route,
+    required this.item,
+    required this.anchor,
+  });
+
+  /// The route whose chrome the capsule belongs to.
+  final ModalRoute<dynamic> route;
+
+  /// The item that was tapped.
+  final GlassBarSheetItem item;
+
+  /// The hoisted capsule's anchor, whose [GlassMorphAnchor.isPresenting] is
+  /// the hold's lifetime.
+  final GlassMorphAnchor anchor;
+
+  /// Whether a route has been presented over [route] since the tap.
+  ///
+  /// Until then the hold is waiting for the sheet to arrive and is not
+  /// dropped by a resolve that finds nothing presented over the route.
+  bool presented = false;
 }
 
 /// A [ChangeNotifier] whose notification is callable by its owner.

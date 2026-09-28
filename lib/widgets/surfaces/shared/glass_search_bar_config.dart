@@ -101,6 +101,12 @@ class GlassSearchBarConfig {
   final Color? micIconColor;
 
   /// Text style for the hint text. Uses a sensible default when null.
+  ///
+  /// Its font size, weight and family are shared with the typed text, so the
+  /// field does not change metrics as the user starts typing. Its colour is
+  /// the hint's; typed text takes [textColor] instead, and falls back to this
+  /// colour only when [textColor] is null. To mute the hint while keeping the
+  /// typed text strong, set both.
   final TextStyle? hintStyle;
 
   /// Optional controller for the search text field.
@@ -143,8 +149,18 @@ class GlassSearchBarConfig {
   /// is provided (the builder is responsible for its own tap handling).
   final VoidCallback? onMicTap;
 
-  /// Color of the typed text. Defaults to `CupertinoColors.label`
-  /// (adapts to light/dark mode).
+  /// Color of the typed text in the expanded search field.
+  ///
+  /// When `null` (the default), the colour is resolved from
+  /// `CupertinoColors.label` using the **app's** active ThemeMode via
+  /// `GlassTheme.brightnessOf` — the package's single brightness authority.
+  /// This ensures the text is always legible against the glass pill regardless
+  /// of whether the device OS is in dark mode, matching the iOS 26 behaviour
+  /// where `UIUserInterfaceStyle` overrides propagate to every sub-view.
+  ///
+  /// Pass an explicit colour (including a [CupertinoDynamicColor]) to override.
+  /// An explicit colour always wins for typed text, including over a colour
+  /// set on [hintStyle], which then applies to the hint alone.
   final Color? textColor;
 
   /// Color of the text cursor (blinking caret) in the expanded

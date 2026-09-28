@@ -46,8 +46,15 @@ uniform float uTopRefractionOnly;
 uniform vec2 uCaptureConfig;
 // Slot 49：合并 hdr测试 后，Dart 宿主在所有平台都会写入最终高光白点。
 // 中文说明：Windows 有界合成仍是 SDR，只为与通用 Shader 保持完全相同的
-// 50 个 float 槽位而声明；下方把它限制到 1.0，不向 Windows 输出扩展亮度。
+// 54 个 float 槽位而声明；下方把它限制到 1.0，不向 Windows 输出扩展亮度。
 uniform float uHighlightHeadroom;
+// Slots 50-53：上游 1.6.x 的 uBodyMode / uTouchPosition / uTouchIntensity。
+// 中文说明：通用 liquid_glass_render.frag 把它们顺延到 Poiesis 专有槽位之后，
+// Windows 入口必须以相同顺序声明并真实参与运算，否则 Dart 宿主写入 50–53
+// 时会越界或被编译器裁掉后错位（drawer_glass_rendering_test 锁定该契约）。
+uniform float uBodyMode;
+uniform vec2 uTouchPosition;
+uniform float uTouchIntensity;
 
 uniform sampler2D uBackgroundTexture;
 uniform sampler2D uGeometryTexture;
@@ -280,7 +287,13 @@ vec3 applySaturation(vec3 color, float saturation) {
     return clamp(mix(vec3(luminance), color, saturation), 0.0, 1.0);
 }
 
-vec3 applyGlassTint(vec3 background, vec4 glassColor) {
+// 中文说明：bodyMode > 0.5 对应上游 GlassBodyMode.clear（iOS 26 Glass.clear），
+// 与 render.glsl 的 applyGlassColor 一致，跳过亮度保持直接按 alpha 混色。
+vec3 applyGlassTint(vec3 background, vec4 glassColor, float bodyMode) {
+    vec3 directMix = mix(background, glassColor.rgb, glassColor.a);
+    if (bodyMode > 0.5) {
+        return directMix;
+    }
     float backgroundLuma = dot(background, kLumaWeights);
     float glassLuma = dot(glassColor.rgb, kLumaWeights);
     vec3 luminosityTint = clamp(
@@ -290,9 +303,8 @@ vec3 applyGlassTint(vec3 background, vec4 glassColor) {
     );
     float chroma = max(max(glassColor.r, glassColor.g), glassColor.b)
         - min(min(glassColor.r, glassColor.g), glassColor.b);
-    vec3 directTint = mix(background, glassColor.rgb, glassColor.a);
     vec3 chromaticTint = mix(background, luminosityTint, glassColor.a);
-    return mix(directTint, chromaticTint, clamp(chroma * 8.0, 0.0, 1.0));
+    return mix(directMix, chromaticTint, clamp(chroma * 8.0, 0.0, 1.0));
 }
 
 void main() {
@@ -307,7 +319,13 @@ void main() {
 
     vec2 geometryUv;
     vec4 geometryData;
+    // 中文说明：与通用 Shader 相同，记录三条几何分支统一的 dp 尺寸，供上游
+    // #337 的边缘折射上限使用；逆仿射纹理路径的 uGeometrySize 是本地逻辑
+    // 像素，屏幕包围盒兼容路径是物理像素，需要在 dpr 已知后再统一换算。
+    vec2 glassSizeRaw;
+    float glassSizeIsPhysical = 0.0;
     if (uAnalyticRect.w > 0.5) {
+        glassSizeRaw = uAnalyticRect.xy;
         vec2 localPoint = geometryLocalPoint(fragCoord);
         geometryUv = clamp(
             localPoint / max(uAnalyticRect.xy, vec2(0.001)),
@@ -322,6 +340,8 @@ void main() {
         vec2 texturePoint = uAnalyticInverseX.w > 0.5
             ? geometryLocalPoint(fragCoord)
             : fragCoord;
+        glassSizeRaw = uGeometrySize;
+        glassSizeIsPhysical = 1.0 - step(0.5, uAnalyticInverseX.w);
         geometryUv = clamp(
             (texturePoint - uGeometryOffset) / max(uGeometrySize, vec2(0.001)),
             0.0,
@@ -338,6 +358,7 @@ void main() {
     // 时 profile.x 扩为 1px、profile.y 同比降低能量。参数与通用 Shader 一致，
     // 保证 Windows 与 Android 的描边累计视觉重量相同。
     float dpr = max(1.0, uEdgeConfig.z * 3.0);
+    vec2 glassLogicalSize = glassSizeRaw / mix(1.0, dpr, glassSizeIsPhysical);
     const float lightRimLogicalWidth = 0.36;
     const float darkRimLogicalWidth = 0.18;
     vec2 lightRimProfile = getEnergyPreservingRimProfile(
@@ -420,6 +441,14 @@ void main() {
             / max(abs(refracted.z), 0.001);
         displacement = refracted.xy * rayLength
             * uOpticalProps.w * refractionGate;
+        // 上游 #337：透镜看不到自身远端之外的内容。把位移限制在玻璃较短边
+        // 的一半（物理像素），避免小胶囊边缘采到上方标题文字形成彩色噪点。
+        float maxReach = 0.5
+            * max(0.0, min(glassLogicalSize.x, glassLogicalSize.y)) * dpr;
+        float reach = length(displacement);
+        if (reach > maxReach) {
+            displacement *= maxReach / reach;
+        }
         // 中文说明：旧 GLES 仅需要反转实际的纹理位移，法线仍保持 Flutter
         // 屏幕坐标语义，防止折射方向与高光方向一起被错误翻转。
         #ifdef LGR_GLES_FLIP_SAMPLE_Y
@@ -460,7 +489,7 @@ void main() {
         background.rgb /= background.a;
     }
 
-    vec3 color = applyGlassTint(background.rgb, uGlassColor);
+    vec3 color = applyGlassTint(background.rgb, uGlassColor, uBodyMode);
     color = applySaturation(color, uLightConfig.z);
 
     vec2 lightDirection = normalize(uLightDirection + vec2(1e-5));
@@ -498,13 +527,35 @@ void main() {
     // alpha 也复用这一已避让值，与通用 Shader 的 passthrough 语义一致。
     float fresnel = fresnelBase * fresnelBase * uEdgeConfig.y
         * innerHighlightGate;
-    // 中文说明：宿主 uniform 现在到 slot 49 的 uHighlightHeadroom 为止，
-    // Windows 专用 Shader 与通用版本维持完全相同的 50 个 float 槽位。此平台
+    // 中文说明：宿主 uniform 现在到 slot 53 的 uTouchIntensity 为止，
+    // Windows 专用 Shader 与通用版本维持完全相同的 54 个 float 槽位。此平台
     // 仍为 SDR：headroom 即使收到大于 1.0 的值也会被限制到 SDR 白点。
     // 真实参与运算可避免 Shader 编译器把“未使用 uniform”裁掉导致槽位错位。
     // 镜面与 ambient rim 同样属于白色反射，统一在描边内侧渐入。
     float sdrWhitePoint = min(max(uHighlightHeadroom, 0.0), 1.0);
-    float highlight = (specular * 0.20 + edge * uEdgeConfig.x * 0.10)
+    // 中文说明：上游 1.6 的触点镜面高光（简化版）。触点与片元同属
+    // FlutterFragCoord 坐标系；只在按压时（uTouchIntensity > 0）执行，
+    // 朝向触点的边缘法线获得 x⁶ 窄高光，并同样受 innerHighlightGate 约束。
+    float touchSpecular = 0.0;
+    if (uTouchIntensity > 0.001) {
+        vec2 toFragment = fragCoord - uTouchPosition;
+        float touchDistance = length(toFragment);
+        float touchRadius = max(70.0 * dpr, uSize.y * 1.5);
+        float distanceFactor = smoothstep(touchRadius, 0.0, touchDistance);
+        if (distanceFactor > 0.001 && touchDistance > 1.0) {
+            float rimTouch = max(
+                0.0,
+                dot(normalXY, toFragment / touchDistance)
+            );
+            float rimTouchSquared = rimTouch * rimTouch;
+            float rawTouch = rimTouchSquared * rimTouchSquared
+                * rimTouchSquared * distanceFactor * uTouchIntensity
+                * max(uLightConfig.x, 0.0) * 2.5;
+            touchSpecular = rawTouch / (1.0 + rawTouch) * edge;
+        }
+    }
+    float highlight = (specular * 0.20 + edge * uEdgeConfig.x * 0.10
+            + touchSpecular * 0.35)
         * innerHighlightGate + fresnel * 0.12;
     color = clamp(color + vec3(highlight), 0.0, sdrWhitePoint);
 

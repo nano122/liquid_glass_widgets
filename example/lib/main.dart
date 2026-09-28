@@ -22,11 +22,16 @@ import 'package:liquid_glass_widgets_example/demos/rtl_layout_demo.dart';
 import 'package:liquid_glass_widgets_example/demos/meniscus_and_blur_demo.dart';
 import 'package:liquid_glass_widgets_example/demos/materialize_demo.dart';
 import 'package:liquid_glass_widgets_example/demos/scroll_edge_style_demo.dart';
+import 'package:liquid_glass_widgets_example/demos/touch_specular_and_vibrancy_demo.dart';
 
 import 'package:liquid_glass_widgets_example/demos/google_maps_demo.dart'
     show PlatformViewDemo;
 import 'package:liquid_glass_widgets_example/demos/quality_comparison_demo.dart'
     show GlassQualityComparisonDemo;
+import 'package:liquid_glass_widgets_example/demos/color_fidelity_demo.dart'
+    show ColorFidelityDemoPage;
+import 'package:liquid_glass_widgets_example/demos/tab_bar_menu_demo.dart'
+    show TabBarMenuDemoPage;
 import 'package:liquid_glass_widgets_example/pages/containers_page.dart';
 import 'package:liquid_glass_widgets_example/pages/feedback_page.dart';
 import 'package:liquid_glass_widgets_example/pages/input_page.dart';
@@ -223,17 +228,17 @@ class _ExploreTab extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Liquid Glass',
+                    'Liquid Glass Widgets',
                     style: TextStyle(
-                      fontSize: 34,
+                      fontSize: 30,
                       fontWeight: FontWeight.w700,
                       color: CupertinoColors.label.resolveFrom(context),
                       letterSpacing: -0.5,
                     ),
                   ),
-                  SizedBox(height: 4),
+                  SizedBox(height: 10),
                   Text(
-                    'iOS 26 Widget Toolkit',
+                    'iOS 26 Flutter Widget Toolkit',
                     style: TextStyle(
                       fontSize: 17,
                       color:
@@ -734,6 +739,20 @@ class _ExamplesTab extends StatelessWidget {
                   ),
                   SizedBox(height: 14),
 
+                  // Large card: Tab Bar Menus
+                  _LargeDemoCard(
+                    title: 'Tab Bar Menus',
+                    subtitle:
+                        'Pull-down menus on bottom, minimizable & searchable bars (#275)',
+                    icon: CupertinoIcons.ellipsis_vertical_circle_fill,
+                    gradient: const [
+                      Color(0xFF2E0854),
+                      Color(0xFF8E2DE2),
+                    ],
+                    destination: const TabBarMenuDemoPage(),
+                  ),
+                  SizedBox(height: 14),
+
                   // Large card: Modal Sheets
                   _LargeDemoCard(
                     title: 'Modal Sheets',
@@ -796,7 +815,7 @@ class _ExamplesTab extends StatelessWidget {
                   ),
                   SizedBox(height: 14),
 
-                  // Row 4: Quality Tiers (full width — Collapse Bar removed in v1.0.0)
+                  // Row 4: Quality Tiers & Color Fidelity
                   Row(
                     children: [
                       Expanded(
@@ -805,6 +824,15 @@ class _ExamplesTab extends StatelessWidget {
                           icon: CupertinoIcons.sparkles,
                           color: const Color(0xFFFFB340),
                           destination: const GlassQualityComparisonDemo(),
+                        ),
+                      ),
+                      SizedBox(width: 14),
+                      Expanded(
+                        child: _SmallDemoCard(
+                          title: 'Color Fidelity',
+                          icon: CupertinoIcons.color_filter,
+                          color: const Color(0xFF00F5D4),
+                          destination: const ColorFidelityDemoPage(),
                         ),
                       ),
                     ],
@@ -911,6 +939,20 @@ class _ExamplesTab extends StatelessWidget {
                       Color(0xFF0072FF),
                     ],
                     destination: const MeniscusAndBlurDemoPage(),
+                  ),
+                  SizedBox(height: 14),
+
+                  _LargeDemoCard(
+                    title: 'Touch & Vibrancy',
+                    subtitle:
+                        'Shader contact specular highlight, nested vibrancy fill & menu tracking',
+                    icon: CupertinoIcons.sparkles,
+                    gradient: const [
+                      Color(0xFF0F2027),
+                      Color(0xFF203A43),
+                      Color(0xFF2C5364),
+                    ],
+                    destination: const TouchSpecularAndVibrancyDemo(),
                   ),
                   SizedBox(height: 14),
 

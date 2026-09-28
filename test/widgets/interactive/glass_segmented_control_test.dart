@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/widgets/shared/glass_effect.dart';
 
 import '../../shared/test_helpers.dart';
 
@@ -704,6 +705,106 @@ void main() {
       } finally {
         handle.dispose();
       }
+    });
+
+    group('indicatorSettings blur neutralisation', () {
+      testWidgets(
+          'premium quality: indicatorSettings with blur > 0 resolves to effectiveBlur == 0 on indicator',
+          (tester) async {
+        await tester.pumpWidget(
+          createTestApp(
+            child: GlassSegmentedControl(
+              segments: const [
+                GlassSegment(label: 'Day'),
+                GlassSegment(label: 'Week'),
+              ],
+              selectedIndex: 0,
+              onSegmentSelected: (_) {},
+              quality: GlassQuality.premium,
+              indicatorSettings: const LiquidGlassSettings(blur: 20),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Press down to trigger active indicator lens bloom (thickness > 0.01)
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('Day')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        final indicatorGlass = tester.widget<GlassEffect>(
+          find.byType(GlassEffect).first,
+        );
+        expect(
+          indicatorGlass.settings.effectiveBlur,
+          0.0,
+          reason: 'Premium indicator lens must never apply BackdropFilter blur',
+        );
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+      });
+
+      testWidgets(
+          'standard quality: indicatorSettings with blur > 0 resolves to effectiveBlur == 0 on indicator',
+          (tester) async {
+        await tester.pumpWidget(
+          createTestApp(
+            child: GlassSegmentedControl(
+              segments: const [
+                GlassSegment(label: 'Day'),
+                GlassSegment(label: 'Week'),
+              ],
+              selectedIndex: 0,
+              onSegmentSelected: (_) {},
+              quality: GlassQuality.standard,
+              indicatorSettings: const LiquidGlassSettings(blur: 15),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Press down to trigger active indicator lens bloom (thickness > 0.01)
+        final gesture =
+            await tester.startGesture(tester.getCenter(find.text('Day')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 100));
+
+        final indicatorGlass = tester.widget<GlassEffect>(
+          find.byType(GlassEffect).first,
+        );
+        expect(
+          indicatorGlass.settings.effectiveBlur,
+          0.0,
+          reason:
+              'Standard indicator lens must never apply BackdropFilter blur',
+        );
+
+        await gesture.up();
+        await tester.pumpAndSettle();
+      });
+    });
+
+    testWidgets(
+        'GlassSegmentedControl.scrollable with infinite borderRadius renders without collapsing',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: GlassSegmentedControl.scrollable(
+            segments: const [
+              GlassSegment(label: 'Day'),
+              GlassSegment(label: 'Week'),
+              GlassSegment(label: 'Month'),
+            ],
+            selectedIndex: 0,
+            onSegmentSelected: (_) {},
+            borderRadius: double.infinity,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(GlassSegmentedControl), findsOneWidget);
     });
   });
 }

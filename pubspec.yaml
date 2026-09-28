@@ -1,6 +1,6 @@
 name: liquid_glass_widgets
 description: "iOS 26-style liquid glass widgets for Flutter. Built on a custom fragment shader for real blur, liquid interactions, specular highlights, and chromatic aberration."
-version: 1.3.0+poiesis.1
+version: 1.7.2+poiesis.1
 
 homepage: https://github.com/sdegenaar/liquid_glass_widgets
 repository: https://github.com/nano122/liquid_glass_widgets
@@ -40,11 +40,13 @@ flutter:
     - shaders/lightweight_glass.frag
     - shaders/interactive_indicator.frag
     - shaders/liquid_glass_geometry_blended.frag
+    # 中文说明：上游 1.5.0 起把最终合成 Shader 从 liquid_glass_final_render.frag
+    # 更名为 liquid_glass_render.frag；Poiesis 沿用官方文件名以减少后续合并冲突。
+    - shaders/liquid_glass_render.frag
     # 中文说明：原生 Windows 在运行时选择有界 AST 的几何 Pass，避免
     # ANGLE 首次链接通用 16 形状 Shader 时阻塞首屏。
     - shaders/liquid_glass_geometry_blended_windows.frag
-    - shaders/liquid_glass_final_render.frag
     # 中文说明：Windows 原生 Impeller/OpenGLESSDF 使用有界采样的最终
-    # 合成；uniform 顺序仍与通用版本保持一致。
+    # 合成；uniform 顺序仍与通用 liquid_glass_render.frag 保持一致。
     - shaders/liquid_glass_final_render_windows.frag
     - shaders/progressive_blur.frag

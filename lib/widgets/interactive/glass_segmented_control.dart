@@ -608,7 +608,7 @@ class _GlassSegmentedControlState extends State<GlassSegmentedControl> {
       final isLight = GlassTheme.brightnessOf(context) == Brightness.light;
       final bg = widget.backgroundColor ??
           (isLight ? _defaultLightBg : _defaultDarkBg);
-      final borderRadius = BorderRadius.circular(widget.borderRadius);
+      final borderRadius = GlassDefaults.safeBorderRadius(widget.borderRadius);
 
       final content = Container(
         height: widget.height,
@@ -672,7 +672,7 @@ class _GlassSegmentedControlState extends State<GlassSegmentedControl> {
       child: DecoratedBox(
         decoration: BoxDecoration(
           color: backgroundColor,
-          borderRadius: BorderRadius.circular(widget.borderRadius),
+          borderRadius: GlassDefaults.safeBorderRadius(widget.borderRadius),
         ),
         child: Padding(
           padding: widget.padding,

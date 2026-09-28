@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/scheduler.dart';
 import '../../utils/glass_morph_controller.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 
@@ -11,6 +12,7 @@ import '../shared/inherited_liquid_glass.dart';
 import 'glass_menu.dart' show GlassMenuAlignment;
 import '../../theme/glass_theme_helpers.dart';
 import '../../theme/glass_theme.dart';
+import '../shared/glass_accessibility_scope.dart';
 
 part 'shared/glass_popover_internal.dart';
 

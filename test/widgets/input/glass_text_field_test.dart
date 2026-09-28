@@ -209,6 +209,23 @@ void main() {
       expect(find.byType(GlassTextField), findsOneWidget);
     });
 
+    testWidgets(
+        'LiquidRoundedRectangle shape with infinite borderRadius renders without error',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: AdaptiveLiquidGlassLayer(
+            settings: defaultTestGlassSettings,
+            child: const GlassTextField(
+              shape: LiquidRoundedRectangle(borderRadius: double.infinity),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byType(GlassTextField), findsOneWidget);
+    });
+
     testWidgets('LiquidOval shape falls back to default border radius',
         (tester) async {
       // Line 352: fallback → BorderRadius.circular(10)

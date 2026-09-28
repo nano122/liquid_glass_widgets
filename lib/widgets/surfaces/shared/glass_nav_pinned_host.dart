@@ -12,6 +12,7 @@ import '../../effects/glass_materialize.dart';
 import '../../effects/shared/glass_materialize_effect.dart';
 import '../../interactive/glass_button.dart';
 import '../../overlays/glass_menu.dart';
+import '../../overlays/glass_modal_sheet.dart';
 import '../../shared/glass_accessibility_scope.dart';
 import '../../shared/glass_isolation_scope.dart';
 import '../glass_app_bar.dart';
@@ -255,6 +256,8 @@ class GlassNavPinnedState {
     this.popping = false,
     required this.topRoute,
     this.transition = GlassEffectTransition.materialize,
+    this.presenting,
+    this.holdForSheet,
   });
 
   /// Chrome of the route beneath the top one.
@@ -308,6 +311,22 @@ class GlassNavPinnedState {
   /// Set from [GlassNavigationShell.effectTransition]; the host downgrades
   /// it to [GlassEffectTransition.identity] under reduce motion.
   final GlassEffectTransition transition;
+
+  /// The [GlassBarItem.sheet] whose sheet is up out of the hoisted chrome, or
+  /// null.
+  ///
+  /// Set while a presentation has handed the rest of the chrome back to the
+  /// route: only the group holding this item is drawn, and the morph has
+  /// emptied its capsule. See [GlassNavigationShellState.holdForSheet].
+  final GlassBarSheetItem? presenting;
+
+  /// Keeps a tapped sheet item's capsule hoisted through its presentation.
+  ///
+  /// Called with the item and its group's anchor before the item presents.
+  /// Null leaves the tap to present without the hold, which hands the capsule
+  /// back with the rest of the chrome.
+  final void Function(GlassBarSheetItem item, GlassMorphAnchor anchor)?
+      holdForSheet;
 }
 
 /// Renders the pinned leading and trailing clusters above the [Navigator].
@@ -390,10 +409,17 @@ class GlassNavPinnedHost extends StatelessWidget {
       chrome = DefaultButtonSettings(settings: settings, child: chrome);
     }
 
+    // The incoming route's guide, as `buttonSettings` above resolves the
+    // material: a transition between two bars that disagree lands on the one
+    // being entered rather than sliding the chrome between them.
+    final inset = state.to.horizontalInset ??
+        state.from.horizontalInset ??
+        GlassNavPinnedMetrics.horizontalPadding;
+
     return Positioned(
       top: topPad,
-      left: GlassNavPinnedMetrics.horizontalPadding,
-      right: GlassNavPinnedMetrics.horizontalPadding,
+      left: inset,
+      right: inset,
       height: GlassNavPinnedMetrics.toolbarHeight,
       child: GlassIsolationScope(
         isolated: true,
@@ -435,7 +461,9 @@ class GlassNavBarGroup {
   final GlassBarItemBackground background;
 
   /// Whether a glass shell is drawn behind [items].
-  bool get glass => background != GlassBarItemBackground.none;
+  bool get glass =>
+      background != GlassBarItemBackground.none &&
+      background != GlassBarItemBackground.own;
 
   /// Height of the shell, and of an icon slot inside it.
   ///
@@ -454,6 +482,12 @@ class GlassNavBarGroup {
   double get stretch => background == GlassBarItemBackground.shared
       ? GlassNavPinnedMetrics.capsuleStretch
       : GlassNavPinnedMetrics.buttonStretch;
+
+  /// Whether [item] is one of [items] — by identity, or by `id` where it has
+  /// one, as items are matched across routes.
+  bool contains(GlassBarActionItem item) => items.any((candidate) =>
+      identical(candidate, item) ||
+      (item.id != null && candidate.id == item.id));
 }
 
 /// Splits a cluster's items into the shells that will actually be drawn.
@@ -477,6 +511,14 @@ List<GlassNavBarGroup> groupGlassNavBarItems(List<GlassBarActionItem> items) {
   }
 
   for (final item in items) {
+    assert(
+      item.tintColor == null ||
+          item.background != GlassBarItemBackground.shared,
+      'GlassBarItem.tintColor is only supported for '
+      'GlassBarItemBackground.separate items. A shared capsule is a single '
+      'glass mesh and cannot tint individual slots. Set background: '
+      'GlassBarItemBackground.separate to use tintColor.',
+    );
     if (item.background == GlassBarItemBackground.shared) {
       run.add(item);
       continue;
@@ -616,6 +658,13 @@ class _PinnedSide extends StatelessWidget {
     final ltr = Directionality.of(context) == TextDirection.ltr;
     final anchoredAtStart = (side == _BarSide.leading) == ltr;
 
+    // Under a presentation only the group the sheet came out of is still the
+    // shell's; the route has the rest. See [GlassNavPinnedState.presenting].
+    final presenting = state.presenting;
+    bool holdsPresenting(int i) =>
+        presenting == null ||
+        (i < toGroups.length && toGroups[i].contains(presenting));
+
     return Transform.scale(
       scale: coverageScale,
       alignment: side == _BarSide.leading
@@ -628,12 +677,13 @@ class _PinnedSide extends StatelessWidget {
           spacing: GlassNavPinnedMetrics.groupGap,
           children: [
             for (var i = 0; i < count; i++)
-              if (_groupShowsAt(
-                context,
-                state,
-                i < fromGroups.length ? fromGroups[i] : null,
-                i < toGroups.length ? toGroups[i] : null,
-              ))
+              if (holdsPresenting(i) &&
+                  _groupShowsAt(
+                    context,
+                    state,
+                    i < fromGroups.length ? fromGroups[i] : null,
+                    i < toGroups.length ? toGroups[i] : null,
+                  ))
                 _PinnedGroup(
                   // Keyed by position so a surviving shell keeps its element:
                   // a glass surface that remounts mid-morph pops its backdrop.
@@ -1273,6 +1323,25 @@ class _PinnedGroupState extends State<_PinnedGroup> {
   /// Drives the pull-down of whichever item is currently the menu trigger.
   final GlassMenuController _menu = GlassMenuController();
 
+  /// The morph anchor of this group's shell.
+  ///
+  /// Written as the trigger builds and read at tap time, never captured: the
+  /// anchor belongs to the trigger's element, and the cluster's items are
+  /// built before it is.
+  GlassMorphAnchor? _anchor;
+
+  /// Presents [item]'s sheet out of this group's shell.
+  ///
+  /// The shell is asked to keep the group first: a presentation hands the
+  /// chrome back to the route, and this capsule has to stay where the droplet
+  /// left it. The anchor is null only before the trigger has built, which a
+  /// tap cannot precede.
+  void _presentSheet(GlassBarSheetItem item) {
+    final anchor = _anchor;
+    if (anchor != null) widget.state.holdForSheet?.call(item, anchor);
+    item.onPresent(anchor);
+  }
+
   @override
   void didUpdateWidget(covariant _PinnedGroup oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -1288,6 +1357,13 @@ class _PinnedGroupState extends State<_PinnedGroup> {
   @override
   Widget build(BuildContext context) {
     final state = widget.state;
+    // The route being entered, in flow terms rather than stack terms. A
+    // change of render path remounts the shell's surface, so it should flip
+    // on the first frame of a transition and never at its end: on a pop back
+    // over a platform view [GlassNavPinnedState.to] is still the route
+    // leaving, and reading it would have the returning capsule materialize
+    // through the shader and pop to the backdrop once settled.
+    final platformViewBackdrop = state.flowTo.platformViewBackdrop;
     // The forward-choreography clock: mirrored on a pop, with the group's
     // sides already swapped to match by the side above.
     final p = state.flowProgress;
@@ -1402,12 +1478,68 @@ class _PinnedGroupState extends State<_PinnedGroup> {
     final inSigma =
         state.settled ? 0.0 : GlassNavPinnedMetrics.incomingSigmaAt(morphT);
 
+    // An item whose content is itself glass cannot be faded or blurred from
+    // outside: painted under an opacity or image-filter layer it has no
+    // backdrop to sample, and renders as its backer until the layer is gone.
+    // Those items dissolve through GlassMaterializeScope instead, which every
+    // package surface honours, and the cluster paints them plain. The scope
+    // sits here, below the GlassMenu wrapper, so it is the nearest one; it
+    // still composes with any enclosing scope, so a menu morph can fade the
+    // trigger.
+    Widget clusterChild({
+      required int slot,
+      required bool isFrom,
+      required double opacity,
+      required double blurSigma,
+      required GlassBarActionItem item,
+      required Widget child,
+    }) {
+      if (item.background != GlassBarItemBackground.own) {
+        return _ClusterChild(
+          slot: slot,
+          isFrom: isFrom,
+          opacity: opacity,
+          blurSigma: blurSigma,
+          child: child,
+        );
+      }
+      return _ClusterChild(
+        slot: slot,
+        isFrom: isFrom,
+        opacity: 1.0,
+        blurSigma: 0.0,
+        child: _OwnGlassDissolve(
+          opacity: opacity,
+          sigma: blurSigma,
+          child: child,
+        ),
+      );
+    }
+
     final children = <Widget>[];
     for (var i = 0; i < slots.length; i++) {
       final slot = slots[i];
       final crossFades = slot.crossFades;
       final fromItem = slot.fromItem;
       final toItem = slot.toItem;
+
+      // Two surfaces of an item's own cannot cross-fade any more than a
+      // shell and a bare item can: stacked, each samples the other, and the
+      // overlap reads as a brighter pad inside the incoming capsule. They
+      // take turns instead, on the same windows a group only one route has.
+      final sequenced = crossFades &&
+          fromItem?.background == GlassBarItemBackground.own &&
+          toItem?.background == GlassBarItemBackground.own;
+      double sequencedPhase({required bool inFrom}) => state.settled
+          ? 1.0
+          : showsIncoming == inFrom
+              ? 0.0
+              : GlassNavPinnedHost.phaseFor(
+                  context,
+                  state,
+                  inFrom: inFrom,
+                  inTo: !inFrom,
+                );
 
       if (fromItem != null) {
         if (toItem == null) {
@@ -1416,29 +1548,37 @@ class _PinnedGroupState extends State<_PinnedGroup> {
           final visible =
               state.settled ? !showsIncoming : (morphing || q < 1.0);
           if (visible) {
-            children.add(_ClusterChild(
+            children.add(clusterChild(
               slot: i,
               isFrom: true,
               opacity: state.settled ? 1.0 : (1.0 - q),
               blurSigma: outSigma,
+              item: fromItem,
               child: _ClusterItem(
                 item: fromItem,
                 enabled: false,
                 slotWidth: fromGroup.slotWidth,
+                tintColor: fromItem.tintColor,
               ),
             ));
           }
         } else if (crossFades && (!state.settled ? q < 1.0 : !showsIncoming)) {
           // Cross-fading outgoing side.
-          children.add(_ClusterChild(
+          children.add(clusterChild(
             slot: i,
             isFrom: true,
-            opacity: state.settled ? 1.0 : (1.0 - q),
+            opacity: sequenced
+                ? sequencedPhase(inFrom: true)
+                : state.settled
+                    ? 1.0
+                    : (1.0 - q),
             blurSigma: outSigma,
+            item: fromItem,
             child: _ClusterItem(
               item: fromItem,
               enabled: false,
               slotWidth: fromGroup.slotWidth,
+              tintColor: fromItem.tintColor,
             ),
           ));
         }
@@ -1450,31 +1590,41 @@ class _PinnedGroupState extends State<_PinnedGroup> {
           // While transition is in-flight, keep mounted in morphing groups so natural width is preserved.
           final visible = state.settled ? showsIncoming : (morphing || q > 0.0);
           if (visible) {
-            children.add(_ClusterChild(
+            children.add(clusterChild(
               slot: i,
               isFrom: false,
               opacity: state.settled ? 1.0 : q,
               blurSigma: inSigma,
+              item: toItem,
               child: _ClusterItem(
                 item: toItem,
                 enabled: state.settled,
                 slotWidth: toGroup.slotWidth,
+                tintColor: toItem.tintColor,
                 onMenuTap: identical(toItem, menuItem) ? _menu.open : null,
+                onSheetTap: _presentSheet,
               ),
             ));
           }
         } else if (!crossFades || (!state.settled ? q > 0.0 : showsIncoming)) {
           // Matched persistent item or cross-fading incoming side.
-          children.add(_ClusterChild(
+          children.add(clusterChild(
             slot: i,
             isFrom: false,
-            opacity: crossFades ? (state.settled ? 1.0 : q) : 1.0,
+            opacity: sequenced
+                ? sequencedPhase(inFrom: false)
+                : crossFades
+                    ? (state.settled ? 1.0 : q)
+                    : 1.0,
             blurSigma: crossFades ? inSigma : 0.0,
+            item: toItem,
             child: _ClusterItem(
               item: toItem,
               enabled: state.settled,
               slotWidth: toGroup.slotWidth,
+              tintColor: toItem.tintColor,
               onMenuTap: identical(toItem, menuItem) ? _menu.open : null,
+              onSheetTap: _presentSheet,
             ),
           ));
         }
@@ -1493,11 +1643,13 @@ class _PinnedGroupState extends State<_PinnedGroup> {
       children: children,
     );
 
-    // Both wrappers are unconditional, even at rest and even with no menu
-    // item: inserting or removing either would remount the group's element,
-    // and a glass shell that remounts mid-morph pops its backdrop. At a phase
-    // of 1.0 the effect is paint-neutral, and a closed GlassMenu adds only
-    // inert wrappers and mounts no overlay, so the resting case costs nothing.
+    // All three wrappers are unconditional, even at rest and even with no
+    // menu or sheet item: inserting or removing any of them would remount the
+    // group's element, and a glass shell that remounts mid-morph pops its
+    // backdrop. At a phase of 1.0 the effect is paint-neutral, a closed
+    // GlassMenu adds only inert wrappers and mounts no overlay, and a morph
+    // trigger at rest paints through a zero translation and a full opacity,
+    // so the resting case costs nothing.
     // The gel is real geometry — the cluster lays out at scale and the glass
     // re-renders its true shape — so all that remains is recentring: the
     // shell is anchored top-edge at its bar corner, and natively the swell
@@ -1517,21 +1669,41 @@ class _PinnedGroupState extends State<_PinnedGroup> {
       scaleFrom: GlassNavPinnedMetrics.materializeScaleFrom,
       child: FractionalTranslation(
         translation: Offset(widget.anchoredAtStart ? -f : f, -f),
-        child: GlassMenu(
-          controller: _menu,
-          items: menuItem?.menuItems ?? const <Widget>[],
-          menuAlignment: menuItem?.menuAlignment,
-          // The fallback is never read: with no menu item there is no trigger
-          // to open one. It matches GlassMenu's own default.
-          menuWidth: menuItem?.menuWidth ?? 200,
-          triggerBuilder: (context, _) => toGroup.glass
-              ? _buildShell(
-                  cluster: cluster,
-                  stretch:
-                      lerpDouble(fromGroup.stretch, toGroup.stretch, clampedT)!,
-                  morphScale: morphScale,
-                )
-              : cluster,
+        // The sheet morphs the whole shell, as the menu does — see
+        // [GlassBarItem.sheet] — so the trigger wraps the shell and not the
+        // tapped item's slot.
+        child: GlassMorphTrigger(
+          builder: (context, anchor) {
+            _anchor = anchor;
+            return GlassMenu(
+              controller: _menu,
+              items: menuItem?.menuItems ?? const <Widget>[],
+              menuAlignment: menuItem?.menuAlignment,
+              // The fallback is never read: with no menu item there is no
+              // trigger to open one. It matches GlassMenu's own default.
+              menuWidth: menuItem?.menuWidth ?? 200,
+              platformViewBackdrop: platformViewBackdrop,
+              triggerBuilder: (context, _) => toGroup.glass
+                  ? _buildShell(
+                      cluster: cluster,
+                      stretch: lerpDouble(
+                        fromGroup.stretch,
+                        toGroup.stretch,
+                        clampedT,
+                      )!,
+                      morphScale: morphScale,
+                      platformViewBackdrop: platformViewBackdrop,
+                      // Forward tintColor from a single-item separate group.
+                      // Multi-item shared groups never have tintColor
+                      // (asserted in groupGlassNavBarItems), so items.first is
+                      // always the only item.
+                      tintColor: toGroup.items.length == 1
+                          ? toGroup.items.first.tintColor
+                          : null,
+                    )
+                  : cluster,
+            );
+          },
         ),
       ),
     );
@@ -1550,9 +1722,20 @@ class _PinnedGroupState extends State<_PinnedGroup> {
     required Widget cluster,
     required double stretch,
     required double morphScale,
+    required bool platformViewBackdrop,
+    Color? tintColor,
   }) {
+    // Build LiquidGlassSettings only when a tint is requested.
+    // GlassBodyMode.clear performs direct alpha-composite tinting, preserving
+    // the exact design-token hex value while retaining specular and Fresnel
+    // rim physics — matching iOS 26's Metal path for coloured bar buttons.
+    final settings = tintColor != null
+        ? LiquidGlassSettings(
+            glassColor: tintColor, bodyMode: GlassBodyMode.clear)
+        : null;
     return GlassButton.custom(
       onTap: () {},
+      platformViewBackdrop: platformViewBackdrop,
       // The radius scales with the gel so the shape stays a true scaled
       // capsule rather than squaring off as it inflates.
       shape: LiquidRoundedRectangle(
@@ -1566,7 +1749,38 @@ class _PinnedGroupState extends State<_PinnedGroup> {
       useOwnLayer: true,
       canRequestFocus: false,
       excludeFromSemantics: true,
+      settings: settings,
       child: ClipRect(child: cluster),
+    );
+  }
+}
+
+/// Dissolves a [GlassBarItemBackground.own] item through its own glass.
+///
+/// The cluster's fade and blur are handed to the item's surface as a
+/// [GlassMaterializeScope] — visibility for the glass, opacity and blur for
+/// the content inside it — in place of the paint-time layers ordinary items
+/// get. Composed with any enclosing scope rather than replacing it, so a
+/// menu fading its trigger still reaches the surface.
+class _OwnGlassDissolve extends StatelessWidget {
+  const _OwnGlassDissolve({
+    required this.opacity,
+    required this.sigma,
+    required this.child,
+  });
+
+  final double opacity;
+  final double sigma;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final outer = GlassMaterializeScope.maybeOf(context);
+    return GlassMaterializeScope(
+      glassProgress: opacity * (outer?.glassProgress ?? 1.0),
+      contentOpacity: opacity * (outer?.contentOpacity ?? 1.0),
+      contentSigma: math.max(sigma, outer?.contentSigma ?? 0.0),
+      child: child,
     );
   }
 }
@@ -1580,11 +1794,19 @@ class _ClusterItem extends StatelessWidget {
     required this.item,
     required this.enabled,
     required this.slotWidth,
+    this.tintColor,
     this.onMenuTap,
+    this.onSheetTap,
   });
 
   final GlassBarActionItem item;
   final bool enabled;
+
+  /// Tint colour forwarded from [GlassBarActionItem.tintColor].
+  ///
+  /// When non-null, the icon/label foreground is set to high-contrast white
+  /// or black so content remains readable over the coloured glass capsule.
+  final Color? tintColor;
 
   /// Width an icon is padded to, matching the height of the group it sits in.
   final double slotWidth;
@@ -1596,8 +1818,15 @@ class _ClusterItem extends StatelessWidget {
   /// its way out.
   final VoidCallback? onMenuTap;
 
+  /// Presents a [GlassBarItem.sheet]'s sheet out of the shell this item sits
+  /// in. Supplied on the same terms as [onMenuTap].
+  final void Function(GlassBarSheetItem item)? onSheetTap;
+
   @override
   Widget build(BuildContext context) {
+    // Promoted to a local so the switch below and the sheet branch further
+    // down can both narrow it.
+    final item = this.item;
     final interactive = enabled && item.enabled;
 
     Widget content = switch (item) {
@@ -1609,13 +1838,24 @@ class _ClusterItem extends StatelessWidget {
           width: slotWidth,
           child: Center(child: icon),
         ),
+      GlassBarSheetItem(:final icon) => SizedBox(
+          width: slotWidth,
+          child: Center(child: icon),
+        ),
       GlassBarCustomItem(:final child) => child,
     };
 
     content = IconTheme.merge(
       data: IconThemeData(
         size: GlassNavPinnedMetrics.iconSize,
-        color: CupertinoColors.label.resolveFrom(context),
+        // When a tint colour is active, flip the foreground to high-contrast
+        // white or black so it remains readable over the coloured capsule.
+        // Falls back to the standard CupertinoColors.label when untinted.
+        color: tintColor != null
+            ? (tintColor!.computeLuminance() > 0.35
+                ? const Color(0xFF000000)
+                : const Color(0xFFFFFFFF))
+            : CupertinoColors.label.resolveFrom(context),
       ),
       child: content,
     );
@@ -1624,12 +1864,18 @@ class _ClusterItem extends StatelessWidget {
       content = Opacity(opacity: 0.5, child: content);
     }
 
+    // A sheet item morphs the whole shell, so the group presents it.
+    final present = onSheetTap;
+    final onTap = item is GlassBarSheetItem
+        ? () => present == null ? item.onPresent(null) : present(item)
+        : (onMenuTap ?? item.onTap);
+
     return Semantics(
       button: true,
       label: item.label,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: interactive ? (onMenuTap ?? item.onTap) : null,
+        onTap: interactive ? onTap : null,
         child: content,
       ),
     );

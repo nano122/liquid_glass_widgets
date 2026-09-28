@@ -1,6 +1,6 @@
 import 'dart:ui';
 import '../../src/renderer/liquid_glass_renderer.dart';
-import '../../src/renderer/internal/interaction_notification.dart';
+import '../../types/interaction_notification.dart';
 
 import '../../types/glass_quality.dart';
 import '../shared/adaptive_glass.dart';
@@ -538,42 +538,39 @@ class _GlassSheetState extends State<GlassSheet> with TickerProviderStateMixin {
         );
 
         // The core inner content of the sheet
-        Widget innerContent = SafeArea(
-          bottom: true,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              _SheetHeader(
-                showIndicator: widget.showDragIndicator,
-                color: widget.dragIndicatorColor,
-                onDismiss: () => Navigator.maybePop(context),
-              ),
-              if (widget.isScrollable)
-                Flexible(
-                  child: NotificationListener<ScrollNotification>(
-                    onNotification: (notification) {
-                      if (notification is ScrollStartNotification &&
-                          notification.dragDetails != null) {
-                        GlassGlowLayer.maybeOf(context)?.removeTouch();
-                      }
-                      return false;
-                    },
-                    child: SingleChildScrollView(
-                      physics: const BouncingScrollPhysics(),
-                      padding: widget.padding,
-                      child: RepaintBoundary(child: widget.child),
-                    ),
+        Widget innerContent = Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            _SheetHeader(
+              showIndicator: widget.showDragIndicator,
+              color: widget.dragIndicatorColor,
+              onDismiss: () => Navigator.maybePop(context),
+            ),
+            if (widget.isScrollable)
+              Flexible(
+                child: NotificationListener<ScrollNotification>(
+                  onNotification: (notification) {
+                    if (notification is ScrollStartNotification &&
+                        notification.dragDetails != null) {
+                      GlassGlowLayer.maybeOf(context)?.removeTouch();
+                    }
+                    return false;
+                  },
+                  child: SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: widget.padding,
+                    child: RepaintBoundary(child: widget.child),
                   ),
-                )
-              else
-                Padding(
-                  padding: widget.padding ?? EdgeInsets.zero,
-                  child: RepaintBoundary(child: widget.child),
                 ),
-              const SizedBox(height: 24),
-            ],
-          ),
+              )
+            else
+              Padding(
+                padding: widget.padding ?? EdgeInsets.zero,
+                child: RepaintBoundary(child: widget.child),
+              ),
+            const SizedBox(height: 24),
+          ],
         );
 
         Widget result = AdaptiveGlass(

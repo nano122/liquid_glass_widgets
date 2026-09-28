@@ -18,6 +18,7 @@ import '../../../utils/draggable_indicator_physics.dart';
 import 'tab_bar_drag_gesture_mixin.dart';
 import '../../../utils/glass_spring.dart';
 import '../../../widgets/interactive/glass_button.dart';
+import '../../../widgets/overlays/glass_menu.dart' show GlassMenu;
 import '../../../widgets/shared/adaptive_glass.dart';
 import '../../../widgets/shared/animated_glass_indicator.dart';
 import '../../../widgets/shared/inherited_liquid_glass.dart';
@@ -152,6 +153,7 @@ class BottomBarTabItem extends StatelessWidget {
     required this.glowSpreadRadius,
     required this.glowOpacity,
     required this.onTap,
+    this.semanticOnTap,
     super.key,
   });
 
@@ -187,6 +189,20 @@ class BottomBarTabItem extends StatelessWidget {
   // Pass null in contexts where the outer TabIndicator owns selection via
   // onTapDown, and accessibility is handled by the indicator's own Semantics.
   final VoidCallback? onTap;
+
+  /// Activation for assistive technology and the keyboard, independent of the
+  /// pointer path.
+  ///
+  /// The bottom and searchable bars own selection on the indicator's own
+  /// `onTapDown`, so every tab is built with a null [onTap] and the
+  /// [GestureDetector] here is excluded from semantics. Without this the tab's
+  /// node is a button with a selected state and no [SemanticsAction.tap]:
+  /// TalkBack and VoiceOver read every destination and can activate none, and
+  /// a focused tab does not answer Enter or Space either.
+  ///
+  /// The layout passes `() => onTabSelected(i)`. It never takes pointer input,
+  /// so the bar's own drag gesture is untouched.
+  final VoidCallback? semanticOnTap;
 
   @override
   Widget build(BuildContext context) {
@@ -227,7 +243,10 @@ class BottomBarTabItem extends StatelessWidget {
       tracksSelection: true,
       isSelected: semanticsSelected ?? selected,
       semanticLabel: tab.semanticLabel ?? tab.label ?? 'Tab',
-      onKeyboardActivate: onTap,
+      onKeyboardActivate: onTap ?? semanticOnTap,
+      // The GestureDetector below is excluded from semantics, so the tap
+      // action has to be declared here or the node carries none at all.
+      semanticOnTap: onTap ?? semanticOnTap,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: GestureDetector(
         // onTap may be null when selection is owned by the outer TabIndicator
@@ -381,27 +400,40 @@ class BottomBarExtraBtn extends StatelessWidget {
             ? LiquidRoundedRectangle(borderRadius: config.size / 2)
             : const LiquidOval());
 
-    final button = GlassButton(
-      icon: config.icon,
-      onTap: config.onTap,
-      label: config.label,
-      width: config.size,
-      height: config.size,
-      quality: quality,
-      iconColor: iconColor,
-      useOwnLayer: !enableBlend, // When blending, share the parent's layer
-      shape: effectiveShape,
-      platformViewBackdrop: platformViewBackdrop,
-      stretch: platformViewBackdrop ? 0.0 : 0.5,
-      // The extra button is anchored inside the compound bar and does not
-      // animate its layout bounds at rest. Marking it stationary lets
-      // AdaptiveGlass retain the BackdropFilter blur in GlassQuality.minimal,
-      // so it matches the frosted appearance of the main tab bar surface.
-      // See: https://github.com/sdegenaar/liquid_glass_widgets/issues/203
-      isStationary: true,
-    );
+    Widget buildButton(VoidCallback onTap) {
+      return GlassButton(
+        icon: config.icon,
+        onTap: onTap,
+        label: config.label,
+        width: config.size,
+        height: config.size,
+        quality: quality,
+        iconColor: iconColor,
+        useOwnLayer: !enableBlend, // When blending, share the parent's layer
+        shape: effectiveShape,
+        platformViewBackdrop: platformViewBackdrop,
+        stretch: platformViewBackdrop ? 0.0 : 0.5,
+        // The extra button is anchored inside the compound bar and does not
+        // animate its layout bounds at rest. Marking it stationary lets
+        // AdaptiveGlass retain the BackdropFilter blur in GlassQuality.minimal,
+        // so it matches the frosted appearance of the main tab bar surface.
+        // See: https://github.com/sdegenaar/liquid_glass_widgets/issues/203
+        isStationary: true,
+        enabled: config.enabled,
+      );
+    }
 
-    return button;
+    if (config.isMenu) {
+      return GlassMenu(
+        menuAlignment: config.menuAlignment,
+        menuWidth: config.menuWidth,
+        autoAdjustToScreen: true,
+        items: config.menuItems!,
+        triggerBuilder: (context, toggleMenu) => buildButton(toggleMenu),
+      );
+    }
+
+    return buildButton(config.onTap);
   }
 }
 
@@ -430,6 +462,7 @@ class TabIndicator extends StatefulWidget {
     required this.visible,
     required this.indicatorColor,
     required this.quality,
+    this.backgroundQuality,
     required this.barHeight,
     required this.barBorderRadius,
     this.indicatorBorderRadius,
@@ -461,6 +494,7 @@ class TabIndicator extends StatefulWidget {
   final LiquidGlassSettings? indicatorSettings;
   final ValueChanged<int> onTabChanged;
   final GlassQuality quality;
+  final GlassQuality? backgroundQuality;
   final double barHeight;
   final double barBorderRadius;
   final double? indicatorBorderRadius;
@@ -516,11 +550,9 @@ class TabIndicatorState extends State<TabIndicator>
   @override
   void notifyTabChanged(int index) => widget.onTabChanged(index);
 
-  // Cache fallback indicator color to avoid allocations
-  static const _fallbackIndicatorColor =
-      Color(0x1AFFFFFF); // white.withValues(alpha: 0.1)
-
-  // 中文说明：底部导航选中胶囊在静止时保留一小部分玻璃材质，不再完全
+  // 中文说明：上游 1.7.2（#344）改为按 GlassTheme.brightnessOf 解析默认指示器颜色，
+  // 旧的固定白色回退常量已无引用，因此只保留 Poiesis 的静止玻璃可见度。
+  // 底部导航选中胶囊在静止时保留一小部分玻璃材质，不再完全
   // 退化为实色填充。数值保持克制，避免选中态抢过整块底栏的主体高光。
   static const _restingIndicatorGlassVisibility = 0.18;
 
@@ -544,10 +576,11 @@ class TabIndicatorState extends State<TabIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final theme = CupertinoTheme.of(context);
+    final brightness = GlassTheme.brightnessOf(context);
     final indicatorColor = widget.indicatorColor ??
-        theme.textTheme.textStyle.color?.withValues(alpha: .1) ??
-        _fallbackIndicatorColor;
+        (brightness == Brightness.dark
+            ? CupertinoColors.white.withValues(alpha: .1)
+            : CupertinoColors.black.withValues(alpha: .1));
     final targetAlignment = computeTabAlignment(widget.tabIndex);
 
     // Nested-arc default: if the outer bar is a capsule sentinel (≥ 9999),
@@ -592,6 +625,7 @@ class TabIndicatorState extends State<TabIndicator>
               child: GestureDetector(
                 key: ValueKey(gestureEpoch),
                 behavior: HitTestBehavior.opaque,
+                excludeFromSemantics: true,
                 onHorizontalDragDown: onBarDragDown,
                 onHorizontalDragStart: onBarDragStart,
                 onHorizontalDragUpdate: onBarDragUpdate,
@@ -646,7 +680,8 @@ class TabIndicatorState extends State<TabIndicator>
                               shape: _barShape,
                             ),
                             child: AdaptiveGlass.grouped(
-                              quality: widget.quality,
+                              quality:
+                                  widget.backgroundQuality ?? widget.quality,
                               platformViewBackdrop: widget.platformViewBackdrop,
                               shape: _barShape,
                               child: Container(
@@ -722,7 +757,8 @@ class TabIndicatorState extends State<TabIndicator>
         clipper: _InverseBarClipper(_barShape),
         child: DecoratedBox(
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(widget.barBorderRadius),
+            borderRadius:
+                GlassDefaults.safeBorderRadius(widget.barBorderRadius),
             boxShadow: shadows,
           ),
         ),
@@ -774,8 +810,10 @@ class TabIndicatorState extends State<TabIndicator>
                   // 当前配方 blur 为 0，额外 RepaintBoundary 不提供模糊缓存收益；
                   // 直接注册可减少一层无必要的合成隔离，并保持底板层级更清晰。
                   Positioned.fill(
+                    // 中文说明：保留 Poiesis 去掉 RepaintBoundary 的层级，同时采用
+                    // 上游 1.6 新增的 backgroundQuality，允许底板与指示器分别指定质量。
                     child: AdaptiveGlass.grouped(
-                      quality: widget.quality,
+                      quality: widget.backgroundQuality ?? widget.quality,
                       platformViewBackdrop: widget.platformViewBackdrop,
                       shape: _barShape,
                       child: const SizedBox.expand(),
@@ -865,8 +903,10 @@ class TabIndicatorState extends State<TabIndicator>
                   // 中文说明：Premium 底板同样直接留在共享玻璃层中。这里不再
                   // 插入无缓存收益的 RepaintBoundary，避免额外的合成层级。
                   Positioned.fill(
+                    // 中文说明：保留 Poiesis 去掉 RepaintBoundary 的层级，同时采用
+                    // 上游 1.6 新增的 backgroundQuality，允许底板与指示器分别指定质量。
                     child: AdaptiveGlass.grouped(
-                      quality: widget.quality,
+                      quality: widget.backgroundQuality ?? widget.quality,
                       platformViewBackdrop: widget.platformViewBackdrop,
                       shape: _barShape,
                       child: const SizedBox.expand(),

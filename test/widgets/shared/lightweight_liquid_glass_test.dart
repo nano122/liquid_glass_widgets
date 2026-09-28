@@ -24,6 +24,25 @@ void main() {
       expect(find.byType(LightweightLiquidGlass), findsOneWidget);
     });
 
+    testWidgets('renders cleanly with bodyMode: GlassBodyMode.clear',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: LightweightLiquidGlass(
+            shape: const LiquidRoundedSuperellipse(borderRadius: 16),
+            settings: const LiquidGlassSettings(
+              bodyMode: GlassBodyMode.clear,
+              blur: 0,
+              glassColor: Color(0xD9C3E0F5),
+            ),
+            child: const Text('clear body mode'),
+          ),
+        ),
+      );
+      expect(find.byType(LightweightLiquidGlass), findsOneWidget);
+      expect(find.text('clear body mode'), findsOneWidget);
+    });
+
     testWidgets('inLayer constructor inherits settings from ancestor',
         (tester) async {
       await tester.pumpWidget(
@@ -104,6 +123,24 @@ void main() {
         ),
       );
       expect(find.byType(LightweightLiquidGlass), findsOneWidget);
+    });
+
+    testWidgets(
+        'renders with LiquidRoundedRectangle(borderRadius: double.infinity) without collapsing ClipRRect to 0.0',
+        (tester) async {
+      await tester.pumpWidget(
+        createTestApp(
+          child: LightweightLiquidGlass(
+            shape: const LiquidRoundedRectangle(borderRadius: double.infinity),
+            child: const SizedBox(width: 100, height: 50),
+          ),
+        ),
+      );
+      expect(find.byType(LightweightLiquidGlass), findsOneWidget);
+      final clipRRect = tester.widget<ClipRRect>(find.byType(ClipRRect));
+      final radius = clipRRect.borderRadius as BorderRadius;
+      expect(radius.topLeft.x.isFinite, isTrue);
+      expect(radius.topLeft.x, greaterThan(0.0));
     });
   });
 

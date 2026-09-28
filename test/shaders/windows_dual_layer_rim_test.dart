@@ -4,7 +4,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:liquid_glass_widgets/src/renderer/shaders.dart';
+import 'package:liquid_glass_widgets/src/engine/shaders.dart';
 
 // 中文说明：回归 2026-09-26 的 Windows 白色描边问题。Windows 原生 Premium
 // 使用独立的有界合成 Shader，旧版本删除了 edge_treatment.glsl，导致浅灰环、
@@ -144,7 +144,7 @@ Future<_Pixels> _renderWindowsGlass({required bool useTexturePath}) async {
     }
   }
 
-  // 中文说明：以下 50 个 float 的顺序与 LiquidGlassRenderObject 写入的
+  // 中文说明：以下 54 个 float 的顺序与 LiquidGlassRenderObject 写入的
   // slot 完全一致；参数取 LiquidGlassSettings 默认值和应用的中性玻璃底色。
   write(<double>[_canvasWidth, _canvasHeight]); // 0-1 uSize
   write(useTexturePath
@@ -177,6 +177,10 @@ Future<_Pixels> _renderWindowsGlass({required bool useTexturePath}) async {
   // 中文说明：合并 hdr测试 后宿主新增 slot 49；非 iOS 平台写 SDR 白点 1.0。
   // 若漏写则默认 0.0，Windows 有界 Shader 的高光上限会被压成纯黑。
   write(<double>[1.0]); // 49 uHighlightHeadroom
+  // 中文说明：升级官方 1.7.2 后宿主追加 uBodyMode(50)、uTouchPosition(51-52)
+  // 与 uTouchIntensity(53)。静止态写 adaptive 与零触点，Shader 结果不变。
+  write(<double>[0]); // 50 uBodyMode
+  write(<double>[0, 0, 0]); // 51-53 uTouchPosition / uTouchIntensity
   shader
     ..setImageSampler(0, backdrop)
     ..setImageSampler(1, geometry, filterQuality: ui.FilterQuality.medium);
@@ -291,7 +295,7 @@ void main() {
     expect(
       entries.map((file) => file.uri.pathSegments.last),
       containsAll(<String>[
-        'liquid_glass_final_render.frag',
+        'liquid_glass_render.frag',
         'liquid_glass_final_render_windows.frag',
         'lightweight_glass.frag',
         'interactive_indicator.frag',

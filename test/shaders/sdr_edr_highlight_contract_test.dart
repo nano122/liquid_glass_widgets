@@ -78,7 +78,7 @@ void main() {
     const entryPaths = <String>[
       'shaders/lightweight_glass.frag',
       'shaders/interactive_indicator.frag',
-      'shaders/liquid_glass_final_render.frag',
+      'shaders/liquid_glass_render.frag',
       'shaders/liquid_glass_final_render_windows.frag',
     ];
 

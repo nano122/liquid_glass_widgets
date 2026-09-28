@@ -18,6 +18,8 @@
 ///      clusters across pushes
 ///  13. Presented sheets — a dialog, action sheet, modal sheet or fullscreen
 ///      dialog covering the pinned chrome the way it covers the page (#259)
+///  14. Tinted bar items — GlassBarItem.tintColor floods the capsule with a
+///      design-token colour (iOS 26 prominent action pattern, issue #312)
 ///
 /// Run standalone:
 ///   flutter run -t lib/demos/nav_bar_patterns_demo.dart
@@ -193,11 +195,27 @@ class NavBarPatternsDemo extends StatelessWidget {
                 ),
                 SizedBox(height: 16),
                 _PatternTile(
+                  title: 'Sheet From The Capsule',
+                  subtitle: 'GlassBarItem.sheet — the capsule empties and '
+                      'stretches into the sheet, hoisted or in-route',
+                  icon: CupertinoIcons.arrow_up_left_square,
+                  onTap: () => _push(context, const _SheetItemDemo()),
+                ),
+                SizedBox(height: 16),
+                _PatternTile(
                   title: 'Title Centering',
                   subtitle:
                       'Verifies title is centred on full bar width with asymmetric leading/trailing (fix #198)',
                   icon: CupertinoIcons.text_aligncenter,
                   onTap: () => _push(context, const _TitleCenteringDemo()),
+                ),
+                SizedBox(height: 16),
+                _PatternTile(
+                  title: 'Tinted Bar Items',
+                  subtitle:
+                      'tintColor floods the whole capsule — iOS 26 prominent action (issue #312)',
+                  icon: CupertinoIcons.circle_fill,
+                  onTap: () => _push(context, const _TintedBarItemDemo()),
                 ),
                 SizedBox(height: 100),
               ],
@@ -2290,6 +2308,125 @@ class _PresentedSheetsDemo extends StatelessWidget {
   }
 }
 
+/// A trailing cluster whose first item morphs into a sheet.
+///
+/// The counterpart to [_PresentedSheetsDemo]: presenting hands the chrome back
+/// to the route, all but the capsule the droplet came out of — the shell
+/// keeps that one, emptied, which is why nothing is drawn where it was until
+/// the droplet is caught.
+/// Push into the second screen to see the same item morph across a route
+/// change as ordinary data.
+class _SheetItemDemo extends StatelessWidget {
+  const _SheetItemDemo({this.detail = false});
+
+  void _push(BuildContext context, Widget page) {
+    Navigator.of(context).push(
+      CupertinoPageRoute<void>(builder: (_) => page),
+    );
+  }
+
+  /// Whether this is the pushed screen, which carries a second action.
+  final bool detail;
+
+  void _present(BuildContext context, GlassMorphAnchor? anchor) {
+    GlassModalSheet.show<void>(
+      context: context,
+      morphFrom: anchor,
+      initialState: GlassSheetState.half,
+      builder: (_) => const _PresentedSheetBody(
+        title: 'Out of the capsule',
+        body: 'The capsule emptied, a droplet stretched out of it and became '
+            'this sheet. Dismiss it and the droplet is poured back into the '
+            'bar it came from.',
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final topPad = MediaQuery.paddingOf(context).top;
+
+    return GlassScaffold(
+      background: const ShowcaseBackground(),
+      settings: RecommendedGlassSettings.standard,
+      statusBarStyle: GlassStatusBarStyle.auto,
+      appBar: GlassAppBar.pinned(
+        title: Text(
+          detail ? 'Detail' : 'Sheet Item',
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            color: CupertinoColors.label.resolveFrom(context),
+          ),
+        ),
+        actions: [
+          GlassBarItem.sheet(
+            icon: const Icon(CupertinoIcons.add),
+            label: 'Add',
+            id: 'add',
+            onPresent: (anchor) => _present(context, anchor),
+          ),
+          if (detail)
+            GlassBarItem.icon(
+              icon: const Icon(CupertinoIcons.share),
+              label: 'Share',
+              id: 'share',
+              onTap: () {},
+            ),
+          GlassBarItem.menu(
+            icon: const Icon(CupertinoIcons.ellipsis),
+            label: 'More',
+            id: 'more',
+            menuItems: [
+              GlassMenuItem(
+                title: 'Rename',
+                icon: const Icon(CupertinoIcons.pencil),
+                onTap: () {},
+              ),
+            ],
+          ),
+        ],
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: SizedBox(height: topPad + 44 + 16)),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            sliver: SliverList.list(
+              children: [
+                Text(
+                  'Tap (+). The whole capsule empties — the ellipsis with it, '
+                  'because on screen the cluster is one control — and the '
+                  'droplet stretches out of its frame rather than out of the '
+                  'glyph. Nothing is drawn where the capsule was until the '
+                  'sheet is dismissed.',
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.4,
+                    color: CupertinoColors.secondaryLabel.resolveFrom(context),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                if (!detail)
+                  _PatternTile(
+                    title: 'Push To A Second Screen',
+                    subtitle: 'The item is ordinary data, so the capsule '
+                        'morphs across the push and (+) holds its place',
+                    icon: CupertinoIcons.arrow_right,
+                    onTap: () =>
+                        _push(context, const _SheetItemDemo(detail: true)),
+                  ),
+              ],
+            ),
+          ),
+          _buildDummyContent(),
+          const SliverToBoxAdapter(child: SizedBox(height: 100)),
+        ],
+      ),
+    );
+  }
+}
+
 /// Content for the presented sheet — deliberately plain, so the only glass in
 /// frame is the pinned chrome sitting on top of it.
 class _PresentedSheetBody extends StatelessWidget {
@@ -2362,6 +2499,461 @@ class _ComposeScreen extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// =============================================================================
+// 14. Tinted Bar Items  (#312)
+// =============================================================================
+
+/// Demonstrates [GlassBarItem.tintColor] — the iOS 26 prominent-action pattern.
+///
+/// The screen mirrors a real "New Event" form:
+///   • Leading  → Cancel (untinted, shared background, no capsule tint)
+///   • Trailing → Add    (blue, separate background, capsule flood-filled)
+///
+/// The body includes a side-by-side comparison strip that shows the visual
+/// difference between the old approach (Icon colour only, grey glass rim still
+/// visible) and the new tintColor (entire capsule floods with the design token,
+/// auto-flips icon to white).
+class _TintedBarItemDemo extends StatefulWidget {
+  const _TintedBarItemDemo();
+
+  @override
+  State<_TintedBarItemDemo> createState() => _TintedBarItemDemoState();
+}
+
+class _TintedBarItemDemoState extends State<_TintedBarItemDemo> {
+  bool _saved = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final topPad = MediaQuery.paddingOf(context).top;
+
+    return GlassScaffold(
+      background: const ShowcaseBackground(),
+      settings: RecommendedGlassSettings.standard,
+      statusBarStyle: GlassStatusBarStyle.auto,
+      appBar: GlassAppBar.pinned(
+        title: Text(
+          'New Event',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: CupertinoColors.label.resolveFrom(context),
+          ),
+        ),
+        // ── Leading: Cancel ─────────────────────────────────────────────────
+        // Untinted, shared background — plain glass capsule, standard label.
+        leading: [
+          GlassBarItem.icon(
+            icon: const Icon(CupertinoIcons.xmark),
+            label: 'Cancel',
+            background: GlassBarItemBackground.separate,
+            onTap: () => Navigator.of(context).maybePop(),
+          ),
+        ],
+        // ── Trailing: Add ───────────────────────────────────────────────────
+        // tintColor floods the entire glass capsule with activeBlue.
+        // The checkmark flips to white automatically — no Icon(color:) needed.
+        actions: [
+          GlassBarItem.icon(
+            icon: const Icon(CupertinoIcons.checkmark),
+            label: 'Save',
+            background: GlassBarItemBackground.separate,
+            tintColor: _saved
+                ? CupertinoColors.systemGreen
+                : CupertinoColors.activeBlue,
+            onTap: () => setState(() => _saved = !_saved),
+          ),
+        ],
+      ),
+      body: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(child: SizedBox(height: topPad + 44 + 24)),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            sliver: SliverList.list(
+              children: [
+                // ── Call-out ─────────────────────────────────────────────────
+                Text(
+                  _saved
+                      ? '✓ Saved! Tap the button again to toggle back to blue.'
+                      : 'Tap the blue checkmark in the top-right to save.\n'
+                          'The capsule floods with the tintColor — not just the '
+                          'glyph — and the icon auto-flips to white.',
+                  style: TextStyle(
+                    fontSize: 15,
+                    height: 1.5,
+                    color: CupertinoColors.secondaryLabel.resolveFrom(context),
+                  ),
+                ),
+
+                const SizedBox(height: 36),
+
+                // ── Side-by-side comparison ───────────────────────────────────
+                Text(
+                  'Before vs After',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                    color: CupertinoColors.label.resolveFrom(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'All four capsules use the same activeBlue. '
+                  '"Before" colours only the glyph — the glass capsule stays neutral. '
+                  '"After" floods the entire capsule via tintColor on both quality tiers.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.4,
+                    color: CupertinoColors.secondaryLabel.resolveFrom(context),
+                  ),
+                ),
+                const SizedBox(height: 20),
+
+                // Row 1 — Before (Standard | Premium)
+                Row(
+                  children: [
+                    Expanded(
+                      child: _TintComparisonCard(
+                        label: 'Before',
+                        qualityTag: 'Standard',
+                        labelColor: CupertinoColors.systemRed,
+                        description: 'Icon(color:)\nGrey rim visible',
+                        child: GlassButton.custom(
+                          onTap: () {},
+                          shape: const LiquidRoundedRectangle(
+                            borderRadius: 22,
+                          ),
+                          width: 44,
+                          height: 44,
+                          child: const Icon(
+                            CupertinoIcons.checkmark,
+                            color: CupertinoColors.activeBlue,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _TintComparisonCard(
+                        label: 'Before',
+                        qualityTag: 'Premium',
+                        labelColor: CupertinoColors.systemRed,
+                        description: 'Icon(color:)\nGrey rim visible',
+                        child: GlassButton.custom(
+                          onTap: () {},
+                          quality: GlassQuality.premium,
+                          useOwnLayer: true,
+                          shape: const LiquidRoundedRectangle(
+                            borderRadius: 22,
+                          ),
+                          width: 44,
+                          height: 44,
+                          child: const Icon(
+                            CupertinoIcons.checkmark,
+                            color: CupertinoColors.activeBlue,
+                            size: 20,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 12),
+
+                // Row 2 — After (Standard | Premium)
+                Row(
+                  children: [
+                    Expanded(
+                      child: _TintComparisonCard(
+                        label: 'After',
+                        qualityTag: 'Standard',
+                        labelColor: CupertinoColors.systemGreen,
+                        description: 'tintColor:\nCapsule floods',
+                        child: GlassButtonGroup.icons(
+                          settings: LiquidGlassSettings(
+                            glassColor: CupertinoColors.activeBlue,
+                            bodyMode: GlassBodyMode.clear,
+                          ),
+                          items: [
+                            GlassButtonGroupItem(
+                              icon: const Icon(CupertinoIcons.checkmark),
+                              onTap: () {},
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _TintComparisonCard(
+                        label: 'After',
+                        qualityTag: 'Premium',
+                        labelColor: CupertinoColors.systemGreen,
+                        description: 'tintColor:\nCapsule floods',
+                        child: GlassButtonGroup.icons(
+                          settings: LiquidGlassSettings(
+                            glassColor: CupertinoColors.activeBlue,
+                            bodyMode: GlassBodyMode.clear,
+                          ),
+                          useOwnLayer: true,
+                          items: [
+                            GlassButtonGroupItem(
+                              icon: const Icon(CupertinoIcons.checkmark),
+                              onTap: () {},
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 36),
+
+                // ── Colour palette showcase ───────────────────────────────────
+                Text(
+                  'Colour Range',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                    color: CupertinoColors.label.resolveFrom(context),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Any Color works. The specular rim adapts; foreground '
+                  'flips automatically based on luminance.',
+                  style: TextStyle(
+                    fontSize: 14,
+                    height: 1.4,
+                    color: CupertinoColors.secondaryLabel.resolveFrom(context),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    _TintPill(
+                      icon: CupertinoIcons.checkmark,
+                      tintColor: CupertinoColors.activeBlue,
+                      name: 'activeBlue',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.trash,
+                      tintColor: CupertinoColors.systemRed,
+                      name: 'systemRed',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.heart_fill,
+                      tintColor: CupertinoColors.systemPink,
+                      name: 'systemPink',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.star_fill,
+                      tintColor: CupertinoColors.systemOrange,
+                      name: 'systemOrange',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.checkmark_seal_fill,
+                      tintColor: CupertinoColors.systemGreen,
+                      name: 'systemGreen',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.bolt_fill,
+                      tintColor: CupertinoColors.systemYellow,
+                      name: 'systemYellow',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.eye,
+                      tintColor: CupertinoColors.systemPurple,
+                      name: 'systemPurple',
+                    ),
+                    _TintPill(
+                      icon: CupertinoIcons.snow,
+                      tintColor: CupertinoColors.systemTeal,
+                      name: 'systemTeal',
+                    ),
+                  ],
+                ),
+
+                const SizedBox(height: 36),
+
+                // ── Code snippet ──────────────────────────────────────────────
+                Text(
+                  'Usage',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: -0.3,
+                    color: CupertinoColors.label.resolveFrom(context),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: CupertinoColors.systemFill.resolveFrom(context),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    'GlassBarItem.icon(\n'
+                    '  icon: const Icon(CupertinoIcons.checkmark),\n'
+                    '  onTap: _save,\n'
+                    '  background: GlassBarItemBackground.separate,\n'
+                    '  tintColor: CupertinoColors.activeBlue,\n'
+                    ');',
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 13,
+                      height: 1.6,
+                      color: CupertinoColors.label.resolveFrom(context),
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 100),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A labelled card framing a glass button for the before/after comparison.
+class _TintComparisonCard extends StatelessWidget {
+  const _TintComparisonCard({
+    required this.label,
+    required this.labelColor,
+    required this.description,
+    required this.child,
+    this.qualityTag,
+  });
+
+  final String label;
+  final CupertinoDynamicColor labelColor;
+  final String description;
+  final Widget child;
+
+  /// Optional quality tier label shown as a small badge (e.g. 'Standard', 'Premium').
+  final String? qualityTag;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: CupertinoColors.systemFill.resolveFrom(context),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: labelColor.resolveFrom(context),
+                ),
+              ),
+              if (qualityTag != null) ...[
+                const SizedBox(width: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  decoration: BoxDecoration(
+                    color:
+                        CupertinoColors.tertiarySystemFill.resolveFrom(context),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    qualityTag!,
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w600,
+                      color: CupertinoColors.secondaryLabel.resolveFrom(
+                        context,
+                      ),
+                      letterSpacing: 0.1,
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 14),
+          Center(child: child),
+          const SizedBox(height: 14),
+          Text(
+            description,
+            style: TextStyle(
+              fontSize: 11,
+              height: 1.4,
+              color: CupertinoColors.secondaryLabel.resolveFrom(context),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A single tinted pill in the colour-palette showcase row.
+class _TintPill extends StatelessWidget {
+  const _TintPill({
+    required this.icon,
+    required this.tintColor,
+    required this.name,
+  });
+
+  final IconData icon;
+  final CupertinoDynamicColor tintColor;
+  final String name;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GlassButtonGroup.icons(
+          settings: LiquidGlassSettings(
+            glassColor: tintColor.resolveFrom(context),
+            bodyMode: GlassBodyMode.clear,
+          ),
+          useOwnLayer: true,
+          items: [
+            GlassButtonGroupItem(
+              icon: Icon(icon),
+              onTap: () {},
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(
+          name,
+          style: TextStyle(
+            fontSize: 10,
+            color: CupertinoColors.secondaryLabel.resolveFrom(context),
+          ),
+        ),
+      ],
     );
   }
 }

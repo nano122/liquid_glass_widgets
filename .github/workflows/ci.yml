@@ -48,16 +48,17 @@ jobs:
           #
           # Renderer tests (test/renderer/) require a live GPU rasterizer and cannot
           # execute in a headless VM. Excluded everywhere in CI.
-          TEST_FILES=$(find test -name '*_test.dart' \
-            ! -path '*/golden/*' \
-            ! -path '*/renderer/*' \
-            | sort | tr '\n' ' ')
-          flutter test --coverage $TEST_FILES
+          #
+          # We pass top-level test directories and root test files rather than
+          # enumerating all ~150 files individually. This prevents exceeding Windows'
+          # 8191-character cmd.exe command line limit (exit code 25) when invoking flutter.bat.
+          TEST_TARGETS=$(echo $(find test -maxdepth 1 -mindepth 1 -type d ! -name 'golden' ! -name 'renderer' | sort) $(find test -maxdepth 1 -name '*_test.dart' | sort))
+          flutter test --coverage $TEST_TARGETS
 
       # Coverage threshold guard — fail if effective coverage drops below 90 %.
       #
-      # Raw Codecov shows ~82 % because it includes lib/src/renderer/* — 16 files
-      # that contain GPU CustomPainter / RenderObject code that cannot execute in a
+      # Raw Codecov shows ~82 % because it includes lib/src/engine/* and lib/src/renderer/* —
+      # foundational GPU CustomPainter / RenderObject code that cannot execute in a
       # headless VM (no GPU rasterizer). Those paths are documented as untestable in
       # ARCHITECTURE.md. We strip them before computing the threshold AND before
       # uploading to Codecov so the badge always reflects effective coverage (~92 %).
@@ -83,13 +84,16 @@ jobs:
           fi
 
           lcov --remove coverage/lcov.info \
+            'lib/src/engine/*' \
+            'lib/src/engine/*/*' \
             'lib/src/renderer/*' \
+            'lib/src/renderer/*/*' \
             $IGNORE_FLAGS \
             -o coverage/lcov_effective.info
 
           TOTAL=$(lcov --summary coverage/lcov_effective.info 2>&1 \
             | grep 'lines' | grep -oE '[0-9]+\.[0-9]+' | head -1)
-          echo "Effective line coverage (renderer excluded): ${TOTAL}%"
+          echo "Effective line coverage (engine/renderer excluded): ${TOTAL}%"
 
           if (( $(echo "$TOTAL < 90.0" | bc -l) )); then
             echo "❌  Effective coverage ${TOTAL}% is below the 90% threshold."
@@ -183,8 +187,5 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          TEST_FILES=$(find test -name '*_test.dart' \
-            ! -path '*/golden/*' \
-            ! -path '*/renderer/*' \
-            | sort | tr '\n' ' ')
-          flutter test $TEST_FILES
+          TEST_TARGETS=$(echo $(find test -maxdepth 1 -mindepth 1 -type d ! -name 'golden' ! -name 'renderer' | sort) $(find test -maxdepth 1 -name '*_test.dart' | sort))
+          flutter test $TEST_TARGETS

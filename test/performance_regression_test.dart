@@ -5,10 +5,10 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:liquid_glass_widgets/src/renderer/internal/multi_shader_builder.dart';
-import 'package:liquid_glass_widgets/src/renderer/internal/render_liquid_glass_geometry.dart';
-import 'package:liquid_glass_widgets/src/renderer/rendering/liquid_glass_render_object.dart';
-import 'package:liquid_glass_widgets/src/renderer/shaders.dart';
+import 'package:liquid_glass_widgets/src/engine/multi_shader_builder.dart';
+import 'package:liquid_glass_widgets/src/engine/render_liquid_glass_geometry.dart';
+import 'package:liquid_glass_widgets/src/engine/rendering/liquid_glass_render_object.dart';
+import 'package:liquid_glass_widgets/src/engine/shaders.dart';
 
 void main() {
   test('Standard/Premium 仅在 Impeller 使用原生共享根层', () {
@@ -186,10 +186,10 @@ void main() {
 
   test('PlatformView uniform 必须位于解析几何 uniform 之后', () {
     final shaderSource = File(
-      'shaders/liquid_glass_final_render.frag',
+      'shaders/liquid_glass_render.frag',
     ).readAsStringSync();
     final renderObjectSource = File(
-      'lib/src/renderer/rendering/liquid_glass_render_object.dart',
+      'lib/src/engine/rendering/liquid_glass_render_object.dart',
     ).readAsStringSync();
 
     // 中文注释：Poiesis 使用 32–43 共十二个 float 保存解析圆角与完整逆仿射，

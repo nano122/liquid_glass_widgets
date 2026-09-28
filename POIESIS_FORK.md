@@ -3,15 +3,15 @@
 ## 上游基线
 
 - 包名：`liquid_glass_widgets`
-- 官方稳定版：`1.3.0`
-- 官方 tag commit：`3482b728fbab125da90f766b4f386e3707be4f3f`
-- pub.dev 发布时间：2026-09-04 02:59:04 UTC
+- 官方稳定版：`1.7.2`
+- 官方发布 commit：`4d3f4dfe4e6188a82c200b1e3a4a2645ccb54d12`
+- pub.dev 发布时间：2026-09-22 04:51:05 UTC
 - 官方仓库：<https://github.com/sdegenaar/liquid_glass_widgets>
 - Poiesis fork：<https://github.com/nano122/liquid_glass_widgets>
-- 发布包 SHA-256：`f9a93694ec2c4607f5adb7140f648cda176aaf943cfbec552c5c416342f828de`
+- 发布包 SHA-256：`5b828ace169b77ebcc38cfc9bf92ad846c9a0b62d7b64a06142f43ceff9cf315`
 
-当前版本从旧 Poiesis fork 的 `main` 以 merge commit 合入官方 `v1.3.0`，再
-语义迁移 Poiesis 补丁；没有压平历史或强制覆盖分支。Poiesis 主项目通过 Git
+当前版本先以 merge commit 合入官方 `v1.3.0`，2026-09-28 再以 merge commit
+合入官方 `1.7.2`，每次都语义迁移 Poiesis 补丁；没有压平历史或强制覆盖分支。Poiesis 主项目通过 Git
 submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版本化。
 
 ## Poiesis 补丁
@@ -109,7 +109,7 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      边缘算法时必须同步全部标记，既让入口内容变化以强制重编译，也由回归测试
      阻止旧 Shader 二进制被静默复用；
    - Windows 有界合成 Shader 同样声明 slot 49 `uHighlightHeadroom`，保持与
-     通用最终 Shader 完全一致的 50 个 float 槽位；它把该值限制到 `1.0`
+     通用最终 Shader 完全一致的 54 个 float 槽位（含 1.7.2 新增的 50–53）；它把该值限制到 `1.0`
      作为 SDR 白点，并继续省略区域高光 Pass，Windows 不输出扩展亮度；
    - 原生 iOS 由宿主读取当前窗口 `UIScreen.currentEDRHeadroom`，组件库默认
      `1.0`，只在实时值超过 SDR 白点时启用并封顶为 `1.22`；Web、非 iOS、
@@ -181,6 +181,31 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
     - 底板从圆角矩形改为连续超椭圆，使顶部高光、肩部过渡与两端曲率使用同一套几何语义；
     - 移除底板 `AdaptiveGlass.grouped` 外层无收益的 `RepaintBoundary`，让底板直接注册到共享玻璃层，减少无必要的合成隔离；
     - `AnimatedGlassIndicator.restingGlassVisibility` 提供默认关闭的静止玻璃下限，底部导航使用 `0.18`，因此选中胶囊静止时保留轻微折射与材质高光，其他组件保持原行为。
+
+14. 合入官方 1.7.2（2026-09-28）时的语义迁移：
+    - 目录跟随上游：`lib/src/renderer/{rendering,internal,...}` 移至
+      `lib/src/engine/`，Premium 最终 Shader 改名 `liquid_glass_render.frag`；
+      fork 独有的 `glass_backdrop_kernel`、`glass_snapshot`、
+      `internal/glass_highlight_headroom` 与 `fragment_shader_extensions`
+      仍留在 `lib/src/renderer/`；
+    - 上游新增的 `uBodyMode` / `uTouchPosition` / `uTouchIntensity` 原写在
+      slot 33–36，会覆盖 Poiesis 解析几何；Premium 与 Windows 安全 Shader
+      统一顺延到 slot 50 / 51–52 / 53（共 54 个 float），轻量 Shader 的
+      `uBodyMode` 放在 slot 38；实时与 capture 两条路径都逐次写入；
+    - 上游 #333 让 `FlutterFragCoord` 相对外层 compositor pass；Poiesis 的
+      “屏幕物理像素 → 本地”逆仿射改由 `shiftGeometryUniformsToPass` 把 pass
+      原点折算进平移项（local = A·frag + (A·origin + b)），解析与纹理两条
+      分支、场景变换同步路径都一致处理；
+    - 上游 #337 边缘折射上限改用三条几何分支统一换算的 dp 尺寸
+      `0.5 * min(glassLogicalSize) * dpr`，并放在 Poiesis 折射区域门控内部，
+      因为逆仿射纹理路径里 `uGeometrySize` 是本地逻辑像素；
+    - 修复上游实时路径触点 uniform 直接用 layer 本地坐标乘 DPR 的问题：
+      `liveTouchPositionUniform` 先经 matteTransform 映射到屏幕，再乘 DPR 并
+      减去 pass 原点；
+    - 采纳上游 nullable `renderShader` 与封顶的 matte DPR；外投影仍按 fork
+      策略全部关闭，上游依赖阴影的 3 个行为测试改为断言“无阴影且无限圆角
+      不崩溃”；上游新增的 5 个亮色 golden 与既有 golden 一样依赖 macOS 基线
+      与阴影，在 Windows 上保持失败，不据此改动渲染。
 
 ## 回退边界
 

@@ -149,8 +149,11 @@ const _kPillDefault = _Preset(
   // Animated pill / indicator — tuned 2026-05-20 (calibrated with 0.25x shader scaling)
   // thickness→rimThickness (÷0.35 dampener → 0.35×1/0.35=0.35 rendered rim)
   // light→lightIntensity   (÷0.6  dampener → 0.60×1/0.6 =0.60 rendered spec)
+  // blur must be 0.0: AnimatedGlassIndicator.baseIndicatorSettings mandates blur=0 for
+  // indicators. A non-zero value propagates through _mergeWithBase and triggers the
+  // BackdropFilter clip path — indicators are not frosted surfaces.
   thickness: 1.0, ambient: 0.28, glow: 0.50, light: 1.0,
-  blur: 3.0,
+  blur: 0.0,
   stdOpacityMultiplier: 1.0,
 );
 const _kBtnDefault = _Preset(
@@ -719,7 +722,12 @@ class GlassQualityComparisonDemoState
             premium: GlassSegmentedControl(
               useOwnLayer: true,
               settings: _kGlass,
-              indicatorSettings: _kGlass,
+              // indicatorSettings intentionally omitted: the indicator pill is a
+              // refractive lens, not a frosted surface. Passing surface settings
+              // (which carry blur > 0) triggers a BackdropFilter on the pill,
+              // smearing the underlying labels and destroying the SDF rim.
+              // Omitting it falls back to AnimatedGlassIndicator.baseIndicatorSettings
+              // (blur: 0), matching GlassTabBar.inline behaviour in the row below.
               quality: GlassQuality.premium,
               segments: [
                 GlassSegment(label: 'Day'),
@@ -816,30 +824,28 @@ class GlassQualityComparisonDemoState
           // ── GlassTabBar (full-width stacked) ─────────────────────────────
           _FullWidthRow(
             label: 'GlassTabBar',
-            premiumWidget: GlassSegmentedControl(
-              useOwnLayer: true,
-              settings: _kGlass,
+            premiumWidget: GlassTabBar.inline(
               quality: GlassQuality.premium,
-              segments: [
-                GlassSegment(icon: Icon(CupertinoIcons.home)),
-                GlassSegment(icon: Icon(CupertinoIcons.search)),
-                GlassSegment(icon: Icon(CupertinoIcons.person)),
+              settings: _kGlass,
+              tabs: const [
+                GlassTab(icon: Icon(CupertinoIcons.home)),
+                GlassTab(icon: Icon(CupertinoIcons.search)),
+                GlassTab(icon: Icon(CupertinoIcons.person)),
               ],
               selectedIndex: _tabIndex,
-              onSegmentSelected: (i) => setState(() => _tabIndex = i),
+              onTabSelected: (i) => setState(() => _tabIndex = i),
             ),
-            standardWidget: GlassSegmentedControl(
-              useOwnLayer: true,
+            standardWidget: GlassTabBar.inline(
+              quality: GlassQuality.standard,
               settings: _kGlassCard,
               indicatorSettings: _kGlassPill,
-              quality: GlassQuality.standard,
-              segments: [
-                GlassSegment(icon: Icon(CupertinoIcons.home)),
-                GlassSegment(icon: Icon(CupertinoIcons.search)),
-                GlassSegment(icon: Icon(CupertinoIcons.person)),
+              tabs: const [
+                GlassTab(icon: Icon(CupertinoIcons.home)),
+                GlassTab(icon: Icon(CupertinoIcons.search)),
+                GlassTab(icon: Icon(CupertinoIcons.person)),
               ],
               selectedIndex: _tabIndex,
-              onSegmentSelected: (i) => setState(() => _tabIndex = i),
+              onTabSelected: (i) => setState(() => _tabIndex = i),
             ),
           ),
 

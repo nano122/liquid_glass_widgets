@@ -199,11 +199,20 @@ mixin TabDragGestureMixin<T extends StatefulWidget> on State<T> {
   ///
   /// Use for **continuous drag tracking** where the indicator center must stay
   /// within its physical travel range (indicator-center physics).
+  ///
+  /// `mirrorForRtl: false` because [tabXAlign] is a physical coordinate
+  /// (-1 is always the left edge) for every bar built on this mixin — the
+  /// indicator is positioned with [Alignment], not [AlignmentDirectional], and
+  /// RTL is carried by the reversed tab data. Mirroring the pointer here would
+  /// flip a second time, so the pill travelled away from the finger and the
+  /// release reported the mirror-image tab. It would also contradict
+  /// [tabIndexFromGlobal], which never mirrors.
   double alignmentFromGlobal(Offset globalPosition) =>
       DraggableIndicatorPhysics.getAlignmentFromGlobalPosition(
         globalPosition,
         context,
         tabCount,
+        mirrorForRtl: false,
       );
 
   /// Maps a global tap/pointer position to a tab index using the raw

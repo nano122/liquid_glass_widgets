@@ -53,6 +53,11 @@ uniform float uTopRefractionOnly;
 // 37: uHighlightHeadroom — iOS 使用当前 EDR 值（最高 1.22），其他 surface 为 1.0。
 // 共享函数会分配主体柔光、宽肩部和极窄峰值；折射采样与结构边颜色不变。
 uniform float uHighlightHeadroom;
+// 38: uBodyMode — 0.0 = adaptive (default, iOS 26 Glass.regular), 1.0 = clear (iOS 26 Glass.clear).
+// In clear mode, luminance normalization is bypassed for direct alpha compositing.
+// 中文说明：上游 1.6.2 将该 uniform 放在 slot 34；Poiesis 的 34–37 已被 uDpr、
+// 折射开关、顶部折射与 EDR headroom 占用，因此顺延到 38，Dart 宿主同步写入。
+uniform float uBodyMode;
 
 uniform sampler2D uBackground; // The captured background texture
 // Slot 22 (uData5.z): specular sharpness level — passed as float 0.0/1.0/2.0, cast to int.
@@ -111,7 +116,8 @@ const float kThicknessRimBoost    = 0.15;  // Rim opacity boost per unit thickne
 //
 // NOTE: In this shader "liquidColor" = the synthesised glass body (finalColor),
 // not a background-texture sample.  The luminance-shift still applies correctly.
-const vec3 LUMA_WEIGHTS = vec3(0.299, 0.587, 0.114);
+// ITU-R BT.709 / IEC 61966-2-1 (sRGB) luminance weights — corrected from BT.601 in 1.4.2.
+const vec3 LUMA_WEIGHTS = vec3(0.2126, 0.7152, 0.0722);
 
 vec3 applyGlassColorLW(vec3 liquidColor, vec4 glassColor) {
     float backdropLuminance = dot(liquidColor, LUMA_WEIGHTS);
@@ -201,6 +207,27 @@ vec3 sampleRoundedRectEdgeAtOffset(
         lightRimProfile.y,
         darkRimProfile.y
     );
+}
+
+// ── Meniscus rim absorption (Beer-Lambert) ──────────────────────────────────
+// Hemisphere lens profile × light-modulated absorption strength.
+// Shared by PATH A (normal + fallback) and PATH B; previously inlined 3×.
+//
+// distFromEdge: unsigned SDF distance from the shape boundary (px)
+// zone:         edge influence zone width (px)
+// surfNormal:   2D surface normal at this fragment
+// lightDir:     normalised light direction
+// strength:     absorption coefficient [0..1]
+float meniscusAbsorption(
+    float distFromEdge, float zone, vec2 surfNormal,
+    vec2 lightDir, float strength) {
+    // [1] Hemisphere lens profile: r_norm maps edge→interior to 0→1.
+    float r_norm = clamp(distFromEdge / zone, 0.0, 1.0);
+    float lensTh = sqrt(max(0.0, 1.0 - r_norm * r_norm));
+    // [2] Light-modulated strength: weaker on lit side (0.6×), stronger on shadow (1.4×).
+    float litness = dot(surfNormal, lightDir);
+    float dirScale = mix(1.4, 0.6, litness * 0.5 + 0.5);
+    return max(0.0, 1.0 - lensTh * strength * dirScale);
 }
 
 out vec4 fragColor;
@@ -536,12 +563,9 @@ void main() {
       vec3 outRgb2 = rimColorBase * rimAlphaBase + pmRgb2 * (1.0 - rimAlphaBase);
       pmRgb2 = outRgb2 + vec3(0.05) * uIndicatorWeight + vec3(fresnel);
       // Meniscus rim darkening (PATH A fallback — no valid texture)
-      // Hemisphere profile + light-modulated strength.
-      float r_norm2 = clamp(distFromEdge / edgeZone, 0.0, 1.0);
-      float lensTh2 = sqrt(max(0.0, 1.0 - r_norm2 * r_norm2));
-      float litness2 = dot(surfaceNormal, uLightDirection);
-      float dirScale2 = mix(1.4, 0.6, litness2 * 0.5 + 0.5);
-      pmRgb2 *= max(0.0, 1.0 - lensTh2 * uEdgeAbsorption * dirScale2);
+      // 中文说明：上游 1.6.2 把半球透镜 × 光照方向的弯月面吸收提取为
+      // meniscusAbsorption()，公式与原内联实现逐项一致，这里改为复用。
+      pmRgb2 *= meniscusAbsorption(distFromEdge, edgeZone, surfaceNormal, uLightDirection, uEdgeAbsorption);
 
       // 中文说明：无有效纹理时用既有主题背景亮度估计相对补光；共享函数会
       // 按 outA2 预乘该估计，避免顶部区域在透明轮廓外形成白色漏边。
@@ -617,8 +641,15 @@ void main() {
       float ambientDarken = clamp((uAmbientStrength * 0.25 + 0.08) * (1.0 + densityFactor * 0.5) + bottomDarken, 0.0, 0.8);
       vec3 darkenedBg = saturatedBg * (1.0 - ambientDarken);
 
-      // PATH A body: use luminosity-preserving glass tint (applyGlassColorLW).
-      vec3 bodyColor = applyGlassColorLW(darkenedBg, uGlassColor);
+      // PATH A body: use luminosity-preserving glass tint (applyGlassColorLW) in adaptive mode.
+      // In clear mode (uBodyMode > 0.5, iOS 26 Glass.clear), bypass luminosity normalization
+      // and directly alpha composite the glass color over the background.
+      vec3 bodyColor;
+      if (uBodyMode > 0.5) {
+        bodyColor = mix(saturatedBg, uGlassColor.rgb, uGlassColor.a);
+      } else {
+        bodyColor = applyGlassColorLW(darkenedBg, uGlassColor);
+      }
 
       // Adaptive rim color: brighten the background at the edge (Premium's getHighlightColor).
       vec3 adaptiveRimColor = mix(bgRgb, vec3(1.0), 0.7);
@@ -637,12 +668,7 @@ void main() {
       );
 
       // [1] Hemisphere lens profile + [2] light-modulated absorption (PATH A normal)
-      float r_normA = clamp(distFromEdge / edgeZone, 0.0, 1.0);
-      float lensThA = sqrt(max(0.0, 1.0 - r_normA * r_normA));
-      float litnessA = dot(surfaceNormal, uLightDirection);
-      float dirScaleA = mix(1.4, 0.6, litnessA * 0.5 + 0.5);
-      float absorptionA = 1.0 - lensThA * uEdgeAbsorption * dirScaleA;
-      finalColor *= max(0.0, absorptionA);
+      finalColor *= meniscusAbsorption(distFromEdge, edgeZone, surfaceNormal, uLightDirection, uEdgeAbsorption);
 
       // 中文说明：有效背景路径复用已折射的 bgRgb；共享函数给主体少量柔光，
       // 顶部以宽肩部衔接极窄峰值，底部基础与峰值都更弱，且不增加纹理读取。
@@ -670,22 +696,25 @@ void main() {
     // PATH B: All Standard widgets use this path.
     // Flutter SrcOver composites us over the BackdropFilter(blur+saturation) background.
     float isLight = step(0.5, uBackdropLuma);
+    float isClear = step(0.5, uBodyMode);
     
-    // 8% frost floor ensures minimum material visibility
-    // In light mode, add more frost for a cleaner white look
-    float simulatedFrost = 0.08 + densityFactor * 0.05 + isLight * 0.04;
-    float pmA = max(glassAlpha, simulatedFrost);
+    // 8% frost floor ensures minimum material visibility in adaptive mode.
+    // In clear mode, simulated frost floor is zeroed out for exact color reproduction.
+    float simulatedFrost = mix(0.08 + densityFactor * 0.05 + isLight * 0.04, 0.0, isClear);
+    float pmA = mix(max(glassAlpha, simulatedFrost), glassAlpha, isClear);
     
     // In light mode, transparent glass becomes white frost. In dark mode, it remains black (ambient darken).
     vec3 frostRgb = vec3(isLight);
-    vec3 baseRgb = mix(frostRgb, uGlassColor.rgb, min(glassAlpha / (simulatedFrost + 0.01), 1.0));
+    vec3 adaptiveBaseRgb = mix(frostRgb, uGlassColor.rgb, min(glassAlpha / (simulatedFrost + 0.01), 1.0));
+    vec3 baseRgb = mix(adaptiveBaseRgb, uGlassColor.rgb, isClear);
     vec3 pmRgb = baseRgb * pmA;
 
-    // Min 3% ambient darkening + bottom volumetric gradient shadow:
+    // Min 3% ambient darkening + bottom volumetric gradient shadow (adaptive mode only):
     float bottomDarken = vertCoord * 0.04;
     float ambientDarken = clamp((uAmbientStrength * 0.25 + 0.03) * (1.0 + densityFactor * 0.5) + bottomDarken, 0.0, 0.8);
-    // Reduce ambient darken in light mode to prevent greyness
+    // Reduce ambient darken in light mode to prevent greyness; zero out in clear mode
     ambientDarken *= mix(1.0, 0.2, isLight);
+    ambientDarken *= (1.0 - isClear);
     
     pmA = pmA + ambientDarken * (1.0 - pmA);
 
@@ -713,11 +742,7 @@ void main() {
     pmA = max(pmA, uGlowIntensity * 0.3 * glowMask);
 
     // [1] Hemisphere + [2] light-modulated absorption (PATH B — no background texture)
-    float r_normB = clamp(distFromEdge / edgeZone, 0.0, 1.0);
-    float lensThB = sqrt(max(0.0, 1.0 - r_normB * r_normB));
-    float litnessB = dot(surfaceNormal, uLightDirection);
-    float dirScaleB = mix(1.4, 0.6, litnessB * 0.5 + 0.5);
-    pmRgb *= max(0.0, 1.0 - lensThB * uEdgeAbsorption * dirScaleB);
+    pmRgb *= meniscusAbsorption(distFromEdge, edgeZone, surfaceNormal, uLightDirection, uEdgeAbsorption);
 
     // 中文说明：无背景纹理路径使用现有 uBackdropLuma 作为粗粒度背景估计，
     // 再按 pmA 预乘并守住合法白点；区域反射不会改变透明度或制造白块。

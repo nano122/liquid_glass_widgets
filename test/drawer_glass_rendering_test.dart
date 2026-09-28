@@ -5,12 +5,12 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
-import 'package:liquid_glass_widgets/src/renderer/internal/multi_shader_builder.dart';
-import 'package:liquid_glass_widgets/src/renderer/internal/render_liquid_glass_geometry.dart';
-import 'package:liquid_glass_widgets/src/renderer/liquid_glass.dart';
-import 'package:liquid_glass_widgets/src/renderer/liquid_glass_blend_group.dart';
-import 'package:liquid_glass_widgets/src/renderer/rendering/liquid_glass_render_object.dart';
-import 'package:liquid_glass_widgets/src/renderer/shaders.dart';
+import 'package:liquid_glass_widgets/src/engine/multi_shader_builder.dart';
+import 'package:liquid_glass_widgets/src/engine/render_liquid_glass_geometry.dart';
+import 'package:liquid_glass_widgets/src/engine/liquid_glass.dart';
+import 'package:liquid_glass_widgets/src/engine/liquid_glass_blend_group.dart';
+import 'package:liquid_glass_widgets/src/engine/rendering/liquid_glass_render_object.dart';
+import 'package:liquid_glass_widgets/src/engine/shaders.dart';
 
 const _settings = LiquidGlassSettings(blur: 0, thickness: 45);
 
@@ -52,20 +52,20 @@ void main() {
         TargetPlatform.android,
         isWeb: false,
       ),
-      endsWith('shaders/liquid_glass_final_render.frag'),
+      endsWith('shaders/liquid_glass_render.frag'),
     );
     expect(
       ShaderKeys.liquidGlassRenderForPlatform(
         TargetPlatform.windows,
         isWeb: true,
       ),
-      endsWith('shaders/liquid_glass_final_render.frag'),
+      endsWith('shaders/liquid_glass_render.frag'),
     );
   });
 
   test('Windows 有界 Shader 保持 host 契约与 Premium 核心效果', () {
     final fullSource =
-        File('shaders/liquid_glass_final_render.frag').readAsStringSync();
+        File('shaders/liquid_glass_render.frag').readAsStringSync();
     final windowsSource = File(
       'shaders/liquid_glass_final_render_windows.frag',
     ).readAsStringSync();

@@ -23,6 +23,7 @@ import '../../../widgets/surfaces/shared/tab_bar_types.dart'
     show GlassTabPillAnchor, MaskingQuality;
 import '../../../widgets/surfaces/glass_tab_bar.dart'
     show GlassTab, GlassTabBarTrailingButton;
+import '../../../widgets/overlays/glass_menu.dart' show GlassMenu;
 import 'tab_bar_bottom_internal.dart'
     show
         BottomBarExtraBtn,
@@ -39,6 +40,7 @@ import 'tab_bar_searchable_internal.dart'
         SearchableTabIndicator;
 import '../../../widgets/surfaces/shared/tab_bar_accessory_placement.dart';
 import '../../../widgets/surfaces/shared/tab_bar_minimize_controller.dart';
+import 'tab_bar_layout_utils.dart';
 
 /// Internal [StatefulWidget] that owns the searchable-placement rendering engine.
 ///
@@ -92,8 +94,9 @@ class TabBarSearchableLayout extends StatefulWidget {
     this.glowSpreadRadius = 8,
     this.glowOpacity = 0.6,
     this.interactionGlowColor,
-    this.interactionGlowRadius = 1.5,
+    this.interactionGlowRadius,
     this.quality,
+    this.backgroundQuality,
     this.magnification = 1.15,
     this.innerBlur = 0.0,
     this.platformViewBackdrop = false,
@@ -182,8 +185,13 @@ class TabBarSearchableLayout extends StatefulWidget {
   final double glowSpreadRadius;
   final double glowOpacity;
   final Color? interactionGlowColor;
-  final double interactionGlowRadius;
+
+  /// Radius of the interaction glow, as a fraction of the layer's shortest
+  /// side. Null asks for the iOS 26 calibration — see
+  /// [resolveTabBarInteractionGlow].
+  final double? interactionGlowRadius;
   final GlassQuality? quality;
+  final GlassQuality? backgroundQuality;
   final double magnification;
   final double innerBlur;
   final bool platformViewBackdrop;
@@ -228,6 +236,19 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
   // GlobalKey preserves the State across rebuilds AND across the
   // AdaptiveLiquidGlassLayer wrapper's quality-path reparenting.
   final GlobalKey _indicatorKey = GlobalKey();
+
+  /// Lays out the tab [Row] in physical (LTR) order regardless of the ambient
+  /// direction, so the first child is on the left — matching the indicator and
+  /// gesture coordinate space. RTL ordering is carried by the reversed tab data
+  /// in [_buildBar], not by the ambient direction of these Rows. Scoping the
+  /// pin to the Rows keeps `Directionality.of(context)` intact for the rest of
+  /// the subtree (notably [indicatorExpansion] / [tabPadding] resolution).
+  static Widget _ltrTabRow({required List<Widget> children}) {
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Row(children: children),
+    );
+  }
 
   void _onControllerChanged() => setState(() {});
 
@@ -445,19 +466,39 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
       widgetQuality: widget.quality,
       fallback: GlassQuality.premium,
     );
+    final effectiveBackgroundQuality = GlassThemeHelpers.resolveQuality(
+      context,
+      widgetQuality: widget.backgroundQuality ?? widget.quality,
+      fallback: GlassQuality.premium,
+    );
 
     final resolvedGlowColors =
         GlassThemeData.of(context).glowColorsFor(context);
-    final effectiveInteractionGlowColor =
-        widget.interactionGlowColor ?? resolvedGlowColors.primary;
+    // A null radius asks for native mode — the same resolution the bottom bar
+    // runs, through the same helper, so the two cannot drift apart again.
+    final glow = resolveTabBarInteractionGlow(
+      interactionGlowRadius: widget.interactionGlowRadius,
+      interactionGlowColor: widget.interactionGlowColor,
+      themeGlowColor: resolvedGlowColors.primary,
+      themeGlowBlurRadius: resolvedGlowColors.glowBlurRadius,
+      isDark: GlassTheme.brightnessOf(context) == Brightness.dark,
+    );
+    final effectiveInteractionGlowColor = glow.color;
 
     final dynamicLabelColor = resolveBarLabelColor(context, darkAmount);
     final resolvedSelectedIconColor =
         widget.selectedIconColor ?? dynamicLabelColor;
     final resolvedUnselectedIconColor =
         widget.unselectedIconColor ?? dynamicLabelColor;
+    // A minimized bar still shows its selected tab; a searching one shows the
+    // tab search was opened from, which the search has since replaced.
+    final resolvedCollapsedIconColor = widget.isMinimizablePlacement
+        ? resolvedSelectedIconColor
+        : resolvedUnselectedIconColor;
 
-    final effectiveGlowBlurRadius = resolvedGlowColors.glowBlurRadius;
+    // Native mode owns the blur: the radius and the falloff are one
+    // calibration. Everything else stays the theme's.
+    final effectiveGlowBlurRadius = glow.blurRadius;
     final effectiveGlowSpreadRadius = resolvedGlowColors.glowSpreadRadius;
     final effectiveGlowOpacity = resolvedGlowColors.glowOpacity;
 
@@ -465,6 +506,39 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
     final effectiveSettings =
         _applyWhiten(widget.settings ?? _defaultGlassSettings, isLight);
     final searching = widget.isSearchActive;
+
+    // RTL support.
+    //
+    // The indicator/gesture coordinate system and the [AnimatedGlassIndicator]
+    // position both operate in physical, left-anchored alignment space (x == -1
+    // is always the left edge), and the gesture math is derived from the render
+    // box geometry — all direction-independent. The only direction-sensitive
+    // part is the two tab [Row]s, which honour the ambient [Directionality] and
+    // visually reverse under RTL. That reversal is what disagrees with the
+    // physical coordinate space, so the pill — and the tap/drag hit-testing —
+    // land on the mirror-image tab.
+    //
+    // Normalise by reversing the tab data and mirroring the selected index and
+    // the tap callback, then pin *only* the tab Rows to LTR (see [_ltrTabRow])
+    // so their physical order matches the coordinate space. Net effect under
+    // RTL: correct ordering (the first tab sits on the trailing/right edge)
+    // with the pill and hit-testing aligned to it. In LTR everything is a
+    // no-op.
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final tabs = isRtl ? widget.tabs.reversed.toList() : widget.tabs;
+    final selectedIndex = isRtl
+        ? widget.tabs.length - 1 - widget.selectedIndex
+        : widget.selectedIndex;
+    final onTabSelected = isRtl
+        ? (int i) => widget.onTabSelected(widget.tabs.length - 1 - i)
+        : widget.onTabSelected;
+    // The interactive buttons/pills render the even GlassButton press lift
+    // unless the glow was customised — per widget or through the theme's glowColors.
+    final themeGlowPrimary =
+        GlassThemeData.of(context).variantFor(context).glowColors?.primary;
+    final nativePressHighlight = widget.interactionGlowColor == null &&
+        themeGlowPrimary == null &&
+        widget.interactionBehavior.hasGlow;
 
     Widget barContent = TweenAnimationBuilder<double>(
       tween: Tween<double>(
@@ -646,20 +720,15 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                               .clamp(0.0, totalW);
 
                           final Widget pillChild;
-                          // The pills render the even GlassButton press lift
-                          // unless the glow was customised — per widget or
-                          // through the theme's glowColors.
-                          final nativePressHighlight =
-                              widget.interactionGlowColor == null &&
-                                  resolvedGlowColors.primary == null &&
-                                  widget.interactionBehavior.hasGlow;
                           if (widget.searchConfig != null) {
                             pillChild = SearchPill(
                               config: widget.searchConfig!,
                               nativePressHighlight: nativePressHighlight,
                               isActive: searching,
                               barBorderRadius: widget.barBorderRadius,
-                              quality: effectiveQuality,
+                              // Chrome-plane peer: matches the track background,
+                              // not the indicator pill (effectiveQuality).
+                              quality: effectiveBackgroundQuality,
                               platformViewBackdrop: widget.platformViewBackdrop,
                               enableBackgroundAnimation:
                                   widget.interactionBehavior.hasScale,
@@ -669,8 +738,7 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                                   widget.interactionBehavior.hasGlow
                                       ? effectiveInteractionGlowColor
                                       : const Color(0x00000000),
-                              interactionGlowRadius:
-                                  widget.interactionGlowRadius,
+                              interactionGlowRadius: glow.radius,
                               interactionGlowBlurRadius:
                                   effectiveGlowBlurRadius,
                               interactionGlowSpreadRadius:
@@ -689,29 +757,56 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                           } else {
                             final renderedTrailing =
                                 widget.trailingButton ?? _lastTrailingButton;
-                            pillChild = MinimizableTrailingPill(
-                              icon: renderedTrailing?.icon,
-                              nativePressHighlight: nativePressHighlight,
-                              onTap: widget.trailingButton?.onTap,
-                              barBorderRadius: widget.barBorderRadius,
-                              quality: effectiveQuality,
-                              platformViewBackdrop: widget.platformViewBackdrop,
-                              enableBackgroundAnimation:
-                                  widget.interactionBehavior.hasScale,
-                              backgroundPressScale: widget.pressScale,
-                              iconColor: resolvedUnselectedIconColor,
-                              interactionGlowColor:
-                                  widget.interactionBehavior.hasGlow
-                                      ? effectiveInteractionGlowColor
-                                      : const Color(0x00000000),
-                              interactionGlowRadius:
-                                  widget.interactionGlowRadius,
-                              interactionGlowBlurRadius:
-                                  effectiveGlowBlurRadius,
-                              interactionGlowSpreadRadius:
-                                  effectiveGlowSpreadRadius,
-                              interactionGlowOpacity: effectiveGlowOpacity,
-                            );
+
+                            Widget buildTrailingPill({VoidCallback? onTap}) {
+                              return MinimizableTrailingPill(
+                                icon: renderedTrailing?.icon,
+                                nativePressHighlight: nativePressHighlight,
+                                onTap: onTap,
+                                label: renderedTrailing?.label,
+                                barBorderRadius: widget.barBorderRadius,
+                                // Chrome-plane peer: matches the track background,
+                                // not the indicator pill (effectiveQuality).
+                                quality: effectiveBackgroundQuality,
+                                platformViewBackdrop:
+                                    widget.platformViewBackdrop,
+                                enableBackgroundAnimation:
+                                    widget.interactionBehavior.hasScale,
+                                backgroundPressScale: widget.pressScale,
+                                iconColor: resolvedUnselectedIconColor,
+                                interactionGlowColor:
+                                    widget.interactionBehavior.hasGlow
+                                        ? effectiveInteractionGlowColor
+                                        : const Color(0x00000000),
+                                interactionGlowRadius: glow.radius,
+                                interactionGlowBlurRadius:
+                                    effectiveGlowBlurRadius,
+                                interactionGlowSpreadRadius:
+                                    effectiveGlowSpreadRadius,
+                                interactionGlowOpacity: effectiveGlowOpacity,
+                              );
+                            }
+
+                            if (renderedTrailing?.isMenu == true) {
+                              pillChild = GlassMenu(
+                                menuAlignment: renderedTrailing!.menuAlignment,
+                                menuWidth: renderedTrailing.menuWidth,
+                                autoAdjustToScreen: true,
+                                items: renderedTrailing.menuItems!,
+                                triggerBuilder: (context, toggleMenu) =>
+                                    buildTrailingPill(
+                                  onTap: renderedTrailing.enabled
+                                      ? toggleMenu
+                                      : null,
+                                ),
+                              );
+                            } else {
+                              pillChild = buildTrailingPill(
+                                onTap: (renderedTrailing?.enabled == true)
+                                    ? widget.trailingButton?.onTap
+                                    : null,
+                              );
+                            }
                           }
 
                           return Positioned(
@@ -768,7 +863,9 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                                     alignment: Alignment.center,
                                     child: BottomBarExtraBtn(
                                       config: widget.extraButton!,
-                                      quality: effectiveQuality,
+                                      // Chrome-plane peer: matches the track background,
+                                      // not the indicator pill (effectiveQuality).
+                                      quality: effectiveBackgroundQuality,
                                       iconColor:
                                           widget.extraButton!.iconColor ??
                                               resolvedUnselectedIconColor,
@@ -794,6 +891,9 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                       ListenableBuilder(
                         listenable: _tabWCtrl,
                         child: _buildTabRow(
+                          tabs: tabs,
+                          selectedIndex: selectedIndex,
+                          onTabSelected: onTabSelected,
                           selected: false,
                           resolvedSelectedIconColor: resolvedSelectedIconColor,
                           resolvedUnselectedIconColor:
@@ -815,10 +915,11 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                             child: SearchableTabIndicator(
                               key: _indicatorKey,
                               quality: effectiveQuality,
+                              backgroundQuality: effectiveBackgroundQuality,
                               visible: widget.showIndicator && !searching,
-                              tabIndex: widget.selectedIndex,
-                              tabCount: widget.tabs.length,
-                              onTabChanged: widget.onTabSelected,
+                              tabIndex: selectedIndex,
+                              tabCount: tabs.length,
+                              onTabChanged: onTabSelected,
                               barHeight: animH,
                               barBorderRadius: widget.barBorderRadius,
                               indicatorBorderRadius:
@@ -837,12 +938,12 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                               passthroughOverPlatformView:
                                   widget.passthroughOverPlatformView,
                               isSearchActive: searching,
+                              nativePressHighlight: nativePressHighlight,
                               interactionGlowColor:
                                   widget.interactionBehavior.hasGlow
                                       ? effectiveInteractionGlowColor
                                       : const Color(0x00000000),
-                              interactionGlowRadius:
-                                  widget.interactionGlowRadius,
+                              interactionGlowRadius: glow.radius,
                               interactionGlowBlurRadius:
                                   effectiveGlowBlurRadius,
                               interactionGlowSpreadRadius:
@@ -851,23 +952,22 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                               enableBackgroundAnimation:
                                   widget.interactionBehavior.hasScale,
                               backgroundPressScale: widget.pressScale,
-                              collapsedLogoBuilder: widget
-                                      .searchConfig?.collapsedLogoBuilder ??
-                                  (context) {
-                                    final currentTab =
-                                        widget.tabs[widget.selectedIndex];
-                                    return Center(
-                                      child: IconTheme(
-                                        data: IconThemeData(
-                                          color: resolvedUnselectedIconColor,
-                                          size: widget.iconSize,
-                                        ),
-                                        child: currentTab.activeIcon ??
-                                            currentTab.icon ??
-                                            const SizedBox.shrink(),
-                                      ),
-                                    );
-                                  },
+                              collapsedLogoBuilder:
+                                  widget.searchConfig?.collapsedLogoBuilder ??
+                                      (context) {
+                                        final currentTab = tabs[selectedIndex];
+                                        return Center(
+                                          child: IconTheme(
+                                            data: IconThemeData(
+                                              color: resolvedCollapsedIconColor,
+                                              size: widget.iconSize,
+                                            ),
+                                            child: currentTab.activeIcon ??
+                                                currentTab.icon ??
+                                                const SizedBox.shrink(),
+                                          ),
+                                        );
+                                      },
                               onDismissSearch: () {
                                 if (widget.onMinimizedTabTap != null) {
                                   widget.onMinimizedTabTap!();
@@ -878,6 +978,9 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                               childUnselected: child!,
                               selectedTabBuilder: (ctx, intensity, alignment) =>
                                   _buildTabRow(
+                                tabs: tabs,
+                                selectedIndex: selectedIndex,
+                                onTabSelected: onTabSelected,
                                 selected: true,
                                 intensity: intensity,
                                 alignment: alignment,
@@ -907,7 +1010,9 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
                             },
                             pillSize: animH,
                             barBorderRadius: widget.barBorderRadius,
-                            quality: effectiveQuality,
+                            // Chrome-plane peer: matches the track background,
+                            // not the indicator pill (effectiveQuality).
+                            quality: effectiveBackgroundQuality,
                             indicatorColor: widget.indicatorColor,
                             settings: widget.settings,
                             cancelButtonColor:
@@ -1085,6 +1190,9 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
   }
 
   Widget _buildTabRow({
+    required List<GlassTab> tabs,
+    required int selectedIndex,
+    required ValueChanged<int> onTabSelected,
     required bool selected,
     required Color resolvedSelectedIconColor,
     required Color resolvedUnselectedIconColor,
@@ -1093,22 +1201,20 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
   }) {
     if (selected) {
       final scale = ui.lerpDouble(1.0, widget.magnification, intensity) ?? 1.0;
-      final currentTabFloat = ((alignment.x + 1) / 2) * widget.tabs.length;
-      final aStart =
-          (currentTabFloat - 1).floor().clamp(0, widget.tabs.length - 1);
-      final aEnd =
-          (currentTabFloat + 1).ceil().clamp(0, widget.tabs.length - 1);
+      final currentTabFloat = ((alignment.x + 1) / 2) * tabs.length;
+      final aStart = (currentTabFloat - 1).floor().clamp(0, tabs.length - 1);
+      final aEnd = (currentTabFloat + 1).ceil().clamp(0, tabs.length - 1);
 
       return ExcludeSemantics(
-        child: Row(
+        child: _ltrTabRow(
           children: [
-            for (var i = 0; i < widget.tabs.length; i++)
+            for (var i = 0; i < tabs.length; i++)
               Expanded(
                 child: (i >= aStart && i <= aEnd)
                     ? Transform.scale(
                         scale: scale,
                         child: BottomBarTabItem(
-                          tab: widget.tabs[i],
+                          tab: tabs[i],
                           selected: true,
                           selectedIconColor: resolvedSelectedIconColor,
                           unselectedIconColor: resolvedUnselectedIconColor,
@@ -1134,14 +1240,14 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
       );
     }
 
-    return Row(
+    return _ltrTabRow(
       children: [
-        for (var i = 0; i < widget.tabs.length; i++)
+        for (var i = 0; i < tabs.length; i++)
           Expanded(
             child: BottomBarTabItem(
-              tab: widget.tabs[i],
+              tab: tabs[i],
               selected: false,
-              semanticsSelected: i == widget.selectedIndex,
+              semanticsSelected: i == selectedIndex,
               selectedIconColor: resolvedSelectedIconColor,
               unselectedIconColor: resolvedUnselectedIconColor,
               selectedLabelColor: widget.selectedLabelColor,
@@ -1157,6 +1263,9 @@ class _TabBarSearchableLayoutState extends State<TabBarSearchableLayout>
               glowSpreadRadius: widget.glowSpreadRadius,
               glowOpacity: widget.glowOpacity,
               onTap: null,
+              // Pointer selection stays with the indicator; this is the tap
+              // action a screen reader and the keyboard activate.
+              semanticOnTap: () => onTabSelected(i),
             ),
           ),
       ],

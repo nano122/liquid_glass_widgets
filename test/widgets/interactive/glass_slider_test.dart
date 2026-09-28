@@ -7,6 +7,7 @@ import 'package:liquid_glass_widgets/widgets/shared/glass_focus_region.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/widgets/shared/adaptive_liquid_glass_layer.dart';
 import 'package:liquid_glass_widgets/types/glass_quality.dart';
+import 'package:liquid_glass_widgets/widgets/shared/glass_effect.dart';
 
 import '../../shared/test_helpers.dart';
 
@@ -313,7 +314,7 @@ void main() {
       final containerFinder = find.byWidgetPredicate((widget) {
         if (widget is Container && widget.decoration is BoxDecoration) {
           final dec = widget.decoration as BoxDecoration;
-          return dec.boxShadow != null && dec.boxShadow!.isNotEmpty;
+          return dec.color == Colors.white;
         }
         return false;
       });
@@ -341,7 +342,7 @@ void main() {
       final containerFinder = find.byWidgetPredicate((widget) {
         if (widget is Container && widget.decoration is BoxDecoration) {
           final dec = widget.decoration as BoxDecoration;
-          return dec.boxShadow != null && dec.boxShadow!.isNotEmpty;
+          return dec.color == Colors.white;
         }
         return false;
       });
@@ -352,6 +353,194 @@ void main() {
       expect(dec.color, isNotNull);
       expect(dec.color!.a,
           equals(1.0)); // Solid white (Opacity controls visibility)
+    });
+
+    for (final quality in [GlassQuality.standard, GlassQuality.premium]) {
+      for (final brightness in Brightness.values) {
+        testWidgets(
+            '$quality $brightness keeps the resting shadow outside glass',
+            (tester) async {
+          var value = 0.5;
+          await tester.pumpWidget(createTestApp(
+            theme: ThemeData(brightness: brightness),
+            child: Center(
+              child: SizedBox(
+                width: 300,
+                child: StatefulBuilder(builder: (context, setState) {
+                  return GlassSlider(
+                    value: value,
+                    quality: quality,
+                    onChanged: (next) => setState(() => value = next),
+                  );
+                }),
+              ),
+            ),
+          ));
+          await tester.pumpAndSettle();
+
+          final shadow = find.descendant(
+            of: find.byType(GlassSlider),
+            matching: find.byWidgetPredicate((widget) =>
+                widget is DecoratedBox &&
+                widget.decoration is BoxDecoration &&
+                (widget.decoration as BoxDecoration).boxShadow?.isNotEmpty ==
+                    true),
+          );
+          expect(shadow, findsOneWidget);
+          // GlassEffect clips its content to the thumb shape, so an internal
+          // BoxShadow loses the pixels that should extend outside the thumb.
+          expect(find.ancestor(of: shadow, matching: find.byType(GlassEffect)),
+              findsNothing);
+          double shadowOpacity() =>
+              (tester.widget<DecoratedBox>(shadow).decoration as BoxDecoration)
+                  .boxShadow!
+                  .single
+                  .color
+                  .a;
+          expect(shadowOpacity(), 0.15);
+          final restingCenter = tester.getCenter(shadow);
+
+          final gesture = await tester.startGesture(restingCenter);
+          await gesture.moveBy(const Offset(60, 0));
+          await tester.pumpAndSettle();
+          expect(value, greaterThan(0.5));
+          expect(shadowOpacity(), 0);
+
+          await gesture.up();
+          await tester.pumpAndSettle();
+          expect(shadowOpacity(), 0.15);
+          expect(tester.getCenter(shadow).dx, greaterThan(restingCenter.dx));
+          final material = find.byWidgetPredicate((widget) =>
+              widget is Container &&
+              widget.decoration is BoxDecoration &&
+              (widget.decoration as BoxDecoration).color == Colors.white);
+          expect(tester.getCenter(shadow), tester.getCenter(material));
+
+          final cancelled = await tester.startGesture(tester.getCenter(shadow));
+          await tester.pumpAndSettle();
+          expect(shadowOpacity(), 0);
+          await cancelled.cancel();
+          await tester.pumpAndSettle();
+          expect(shadowOpacity(), 0.15);
+        });
+      }
+    }
+
+    for (final quality in [GlassQuality.standard, GlassQuality.premium]) {
+      testWidgets('$quality custom shadows preserve geometry and animate alpha',
+          (tester) async {
+        const customShadows = [
+          BoxShadow(
+            color: Color.from(alpha: 0.4, red: 0.2, green: 0.3, blue: 0.5),
+            blurRadius: 12,
+            spreadRadius: 1,
+            offset: Offset(2, 4),
+            blurStyle: BlurStyle.outer,
+          ),
+          BoxShadow(
+            color: Color.from(alpha: 0.12, red: 0, green: 0, blue: 0),
+            blurRadius: 3,
+            offset: Offset(0, 1),
+          ),
+        ];
+        await tester.pumpWidget(createTestApp(
+          child: Center(
+            child: SizedBox(
+              width: 300,
+              child: GlassSlider(
+                value: 0.5,
+                quality: quality,
+                thumbShadow: customShadows,
+                onChanged: (_) {},
+              ),
+            ),
+          ),
+        ));
+        await tester.pumpAndSettle();
+        final shadow = find.descendant(
+          of: find.byType(GlassSlider),
+          matching: find.byWidgetPredicate((widget) =>
+              widget is DecoratedBox &&
+              widget.decoration is BoxDecoration &&
+              (widget.decoration as BoxDecoration).boxShadow?.length == 2),
+        );
+        List<BoxShadow> renderedShadows() =>
+            (tester.widget<DecoratedBox>(shadow).decoration as BoxDecoration)
+                .boxShadow!;
+        expect(shadow, findsOneWidget);
+        expect(find.ancestor(of: shadow, matching: find.byType(GlassEffect)),
+            findsNothing);
+        expect(renderedShadows(), customShadows);
+
+        final gesture = await tester.startGesture(tester.getCenter(shadow));
+        await gesture.moveBy(const Offset(30, 0));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 75));
+        final fading = renderedShadows();
+        final fade = fading.first.color.a / customShadows.first.color.a;
+        expect(fade, greaterThan(0));
+        expect(fade, lessThan(1));
+        for (var i = 0; i < customShadows.length; i++) {
+          final original = customShadows[i];
+          expect(fading[i].color.a, closeTo(original.color.a * fade, 1e-9));
+          expect(fading[i].copyWith(color: original.color), original);
+        }
+        await tester.pumpAndSettle();
+        expect(renderedShadows().every((s) => s.color.a == 0), isTrue);
+        await gesture.up();
+        await tester.pumpAndSettle();
+        expect(renderedShadows(), customShadows);
+
+        final cancelled = await tester.startGesture(tester.getCenter(shadow));
+        await tester.pumpAndSettle();
+        expect(renderedShadows().every((s) => s.color.a == 0), isTrue);
+        await cancelled.cancel();
+        await tester.pumpAndSettle();
+        expect(renderedShadows(), customShadows);
+      });
+    }
+
+    testWidgets('thumbShadow can disable and restore the default on rebuild',
+        (tester) async {
+      List<BoxShadow>? shadows = const [];
+      late StateSetter update;
+      await tester.pumpWidget(createTestApp(
+        child: Center(
+          child: SizedBox(
+            width: 300,
+            child: StatefulBuilder(builder: (context, setState) {
+              update = setState;
+              return GlassSlider(
+                value: 0.5,
+                thumbShadow: shadows,
+                onChanged: (_) {},
+              );
+            }),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+      final shadow = find.descendant(
+        of: find.byType(GlassSlider),
+        matching: find.byWidgetPredicate((widget) =>
+            widget is DecoratedBox &&
+            widget.decoration is BoxDecoration &&
+            (widget.decoration as BoxDecoration).boxShadow?.isNotEmpty == true),
+      );
+      expect(shadow, findsNothing);
+      update(() => shadows = null);
+      await tester.pumpAndSettle();
+      expect(shadow, findsOneWidget);
+      final restored =
+          (tester.widget<DecoratedBox>(shadow).decoration as BoxDecoration)
+              .boxShadow!
+              .single;
+      expect(restored.color.a, 0.15);
+      expect(restored.blurRadius, 8);
+      expect(restored.offset, const Offset(0, 2));
+      update(() => shadows = const []);
+      await tester.pumpAndSettle();
+      expect(shadow, findsNothing);
     });
 
     group('keyboard focus & accessibility', () {

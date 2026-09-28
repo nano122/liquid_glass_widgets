@@ -126,6 +126,36 @@ void main() {
   });
 
   // -------------------------------------------------------------------------
+  // GlassAccessibilityScope — iOS Reduce Motion
+  // -------------------------------------------------------------------------
+
+  group('GlassAccessibilityScope — iOS Reduce Motion', () {
+    testWidgets('reads platform reduceMotion when disableAnimations is false', (
+      tester,
+    ) async {
+      tester.platformDispatcher.accessibilityFeaturesTestValue =
+          const FakeAccessibilityFeatures(reduceMotion: true);
+      addTearDown(
+        tester.platformDispatcher.clearAccessibilityFeaturesTestValue,
+      );
+
+      GlassAccessibilityData? captured;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              captured = GlassAccessibilityData.of(context);
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
+
+      expect(captured?.reduceMotion, isTrue);
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // GlassAccessibilityScope — explicit overrides
   // -------------------------------------------------------------------------
 

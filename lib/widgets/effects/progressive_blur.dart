@@ -184,17 +184,26 @@ class _ProgressiveBlurState extends State<ProgressiveBlur> {
     // backdrop, not this widget — so the shader needs this widget's own
     // device-pixel rectangle to normalise the gradient over. Both halves of
     // that rectangle are resolved at PAINT time; see [_RenderProgressiveBlur].
+    //
+    // The ClipRect bounds what the filter WRITES — a backdrop filter otherwise
+    // reaches up to the nearest ancestor clip, and the shader clamps its
+    // gradient at the region's edges rather than stopping there, so an
+    // unclipped band frosted the whole backdrop width. Under a Cupertino pop
+    // that is the route being revealed, which is translated, not clipped
+    // (#278).
     // coverage:ignore-start
     // Requires a compiled FragmentProgram; the headless test VM never provides
     // one. The fallback path above is tested.
-    return _ProgressiveBlurLayer(
-      hShader: h,
-      vShader: v,
-      maxSigma: widget.maxSigma,
-      falloff: widget.falloff,
-      direction: widget.direction,
-      devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
-      child: const SizedBox.expand(),
+    return ClipRect(
+      child: _ProgressiveBlurLayer(
+        hShader: h,
+        vShader: v,
+        maxSigma: widget.maxSigma,
+        falloff: widget.falloff,
+        direction: widget.direction,
+        devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
+        child: const SizedBox.expand(),
+      ),
     );
     // coverage:ignore-end
   }

@@ -7,9 +7,11 @@ import 'utils/accessibility_config.dart' as glass_config;
 import 'utils/glass_brightness.dart' show glassExternalBrightnessResolver;
 import 'utils/glass_performance_monitor.dart';
 import 'src/renderer/liquid_glass_renderer.dart';
-import 'src/renderer/shaders.dart';
+import 'src/engine/shaders.dart';
 
-import 'src/renderer/internal/multi_shader_builder.dart';
+import 'src/engine/multi_shader_builder.dart';
+// 中文说明：Poiesis 的 iOS EDR 高光 headroom 桥接仍放在 renderer/internal，
+// 上游 1.5.0 起把引擎迁移到 src/engine，这里只同步 multi_shader_builder 的新路径。
 import 'src/renderer/internal/glass_highlight_headroom.dart';
 import 'widgets/shared/glass_adaptive_scope.dart';
 import 'widgets/shared/glass_effect.dart';
@@ -107,7 +109,7 @@ class LiquidGlassWidgets {
   /// | `lightweight_glass.frag` | Minimal glass layer |
   /// | `interactive_indicator.frag` | Custom refraction effect |
   /// | `liquid_glass_geometry_blended.frag` | Geometry / SDF pass |
-  /// | `liquid_glass_final_render.frag` | Final composite pass |
+  /// | `liquid_glass_render.frag` | Final composite pass |
   /// Controls shader preloading and warm-up behaviour during [initialize].
   static Future<void> initialize({
     bool enablePerformanceMonitor = true,

@@ -41,6 +41,21 @@ void main() {
     );
   }
 
+  Widget ltrBar(
+      {required ValueChanged<int> onTabSelected, int selectedIndex = 1}) {
+    return createTestApp(
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: GlassTabBar.bottom(
+          tabs: tabs,
+          selectedIndex: selectedIndex,
+          onTabSelected: onTabSelected,
+          maskingQuality: MaskingQuality.off,
+        ),
+      ),
+    );
+  }
+
   group('GlassTabBar.bottom RTL', () {
     testWidgets('tapping a tab reports its logical index', (tester) async {
       var selected = -1;
@@ -75,5 +90,58 @@ void main() {
       expect(homeCenter.dx, greaterThan(profileCenter.dx));
       expect(homeCenter.dx, greaterThan(screenWidth / 2));
     });
+
+    testWidgets('a drag reports the tab under the finger, not its mirror', (
+      tester,
+    ) async {
+      var selected = -1;
+      await tester.pumpWidget(rtlBar(onTabSelected: (i) => selected = i));
+
+      // Visual order under RTL is Profile | Search | Home, left to right.
+      final home = tester.getCenter(find.text('Home').hitTestable().first);
+      final search = tester.getCenter(find.text('Search').hitTestable().first);
+      expect(home.dx, greaterThan(search.dx));
+
+      await dragAcross(tester, from: search, to: home);
+
+      // The finger finished over 'Home', logical index 0. The tap path never
+      // mirrored the pointer, but the drag physics did — so a press landed on
+      // the right tab and the slide then ran backwards, reporting 'Profile'.
+      expect(selected, 0);
+    });
+
+    testWidgets('LTR dragging is unchanged', (tester) async {
+      var selected = -1;
+      await tester.pumpWidget(ltrBar(onTabSelected: (i) => selected = i));
+
+      final profile =
+          tester.getCenter(find.text('Profile').hitTestable().first);
+      final search = tester.getCenter(find.text('Search').hitTestable().first);
+      expect(profile.dx, greaterThan(search.dx));
+
+      await dragAcross(tester, from: search, to: profile);
+
+      expect(selected, 2);
+    });
   });
+}
+
+/// Slides a finger from [from] to [to] and releases it standing still, so the
+/// velocity fling in `onBarDragEnd` cannot carry the target past the tab the
+/// finger actually ended on.
+Future<void> dragAcross(
+  WidgetTester tester, {
+  required Offset from,
+  required Offset to,
+}) async {
+  final gesture = await tester.startGesture(from);
+  await tester.pump(const Duration(milliseconds: 16));
+  await gesture.moveTo(Offset.lerp(from, to, 0.5)!);
+  await tester.pump(const Duration(milliseconds: 16));
+  await gesture.moveTo(to);
+  await tester.pump(const Duration(milliseconds: 100));
+  await gesture.moveTo(to);
+  await tester.pump(const Duration(milliseconds: 100));
+  await gesture.up();
+  await tester.pumpAndSettle();
 }
