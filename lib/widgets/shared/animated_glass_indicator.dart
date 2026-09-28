@@ -56,6 +56,12 @@ class AnimatedGlassIndicator extends StatelessWidget {
   /// Whether to render the glass effect shader pass.
   final bool paintGlass;
 
+  /// 静止时玻璃层仍需保留的最低可见度，范围为 0～1。
+  ///
+  /// 默认值为 0，保持既有组件“静止实色、交互转为玻璃”的行为。底部导航
+  /// 可以传入较小数值，让选中胶囊在静止时仍带有轻微折射和 HDR 材质高光。
+  final double restingGlassVisibility;
+
   /// Corner radius of the indicator pill.
   ///
   /// Defaults to `9999.0`, which the shader's own `r = min(r, shortest)` clamp
@@ -151,6 +157,7 @@ class AnimatedGlassIndicator extends StatelessWidget {
     this.backgroundKey,
     this.paintBackground = true,
     this.paintGlass = true,
+    this.restingGlassVisibility = 0.0,
     this.exactWidth,
     this.exactOffset,
     this.shadows,
@@ -381,10 +388,11 @@ class AnimatedGlassIndicator extends StatelessWidget {
       ),
     );
 
-    // 2. Glass Indicator (Active/Dragging state)
-    // We fade the glass in/out by setting `visibility` on the settings rather
-    // than wrapping the widget in `Opacity`.
-    final fade = thickness.clamp(0.0, 1.0);
+    // 中文说明：交互进度仍控制形变与 pinch；材质可见度则允许调用方设置
+    // 静止下限。这样底部导航能保留弱玻璃，而其他控件默认值为 0 时行为不变。
+    final interactionFade = thickness.clamp(0.0, 1.0);
+    final restingFade = restingGlassVisibility.clamp(0.0, 1.0);
+    final fade = restingFade + ((1.0 - restingFade) * interactionFade);
     final base =
         settings != null ? _mergeWithBase(settings!) : baseIndicatorSettings;
 
@@ -409,7 +417,7 @@ class AnimatedGlassIndicator extends StatelessWidget {
       shape: shape,
       settings: effectiveSettings,
       quality: quality,
-      interactionIntensity: thickness,
+      interactionIntensity: fade,
       backgroundKey: backgroundKey,
       clipExpansion:
           isVertical ? _jellyClipExpansionVertical : _jellyClipExpansion,
@@ -484,7 +492,7 @@ class AnimatedGlassIndicator extends StatelessWidget {
     // with a RepaintBoundary, the pre-computed AA will misalign with the pixel
     // grid during the transform, causing stair-stepping on the edges.
     final interactiveIndicator =
-        thickness > 0.01 ? shadowedGlass : const SizedBox.expand();
+        fade > 0.01 ? shadowedGlass : const SizedBox.expand();
 
     // Standard: background pill included inside Transform so the solid pill
     // carries the jelly squish visually. The glass lens alone is too

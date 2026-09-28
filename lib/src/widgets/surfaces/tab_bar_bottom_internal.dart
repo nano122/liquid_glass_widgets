@@ -520,11 +520,15 @@ class TabIndicatorState extends State<TabIndicator>
   static const _fallbackIndicatorColor =
       Color(0x1AFFFFFF); // white.withValues(alpha: 0.1)
 
+  // 中文说明：底部导航选中胶囊在静止时保留一小部分玻璃材质，不再完全
+  // 退化为实色填充。数值保持克制，避免选中态抢过整块底栏的主体高光。
+  static const _restingIndicatorGlassVisibility = 0.18;
+
   final GlobalKey _iconLayerKey = GlobalKey();
 
   // Cached shape to avoid recreation on every animation frame
-  late LiquidRoundedRectangle _barShape =
-      LiquidRoundedRectangle(borderRadius: widget.barBorderRadius);
+  late LiquidRoundedSuperellipse _barShape =
+      LiquidRoundedSuperellipse(borderRadius: widget.barBorderRadius);
 
   @override
   void didUpdateWidget(covariant TabIndicator oldWidget) {
@@ -533,7 +537,8 @@ class TabIndicatorState extends State<TabIndicator>
 
     // Update cached shape if border radius changes
     if (oldWidget.barBorderRadius != widget.barBorderRadius) {
-      _barShape = LiquidRoundedRectangle(borderRadius: widget.barBorderRadius);
+      _barShape =
+          LiquidRoundedSuperellipse(borderRadius: widget.barBorderRadius);
     }
   }
 
@@ -765,15 +770,15 @@ class TabIndicatorState extends State<TabIndicator>
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // Glass background (Cached to prevent blur re-rasterization on pill drag)
+                  // 中文说明：底板直接作为共享玻璃层的几何节点参与合成。
+                  // 当前配方 blur 为 0，额外 RepaintBoundary 不提供模糊缓存收益；
+                  // 直接注册可减少一层无必要的合成隔离，并保持底板层级更清晰。
                   Positioned.fill(
-                    child: RepaintBoundary(
-                      child: AdaptiveGlass.grouped(
-                        quality: widget.quality,
-                        platformViewBackdrop: widget.platformViewBackdrop,
-                        shape: _barShape,
-                        child: const SizedBox.expand(),
-                      ),
+                    child: AdaptiveGlass.grouped(
+                      quality: widget.quality,
+                      platformViewBackdrop: widget.platformViewBackdrop,
+                      shape: _barShape,
+                      child: const SizedBox.expand(),
                     ),
                   ),
 
@@ -791,7 +796,7 @@ class TabIndicatorState extends State<TabIndicator>
           ),
 
           // Glass indicator — on top so it refracts the icon layer AND the glow beneath.
-          if (widget.visible && thickness > 0.05)
+          if (widget.visible)
             AnimatedGlassIndicator(
               velocity: velocity,
               itemCount: widget.tabCount,
@@ -806,6 +811,7 @@ class TabIndicatorState extends State<TabIndicator>
               settings: widget.indicatorSettings,
               borderRadius: indicatorRadius,
               pinchStrength: widget.indicatorPinchStrength,
+              restingGlassVisibility: _restingIndicatorGlassVisibility,
               backgroundKey: widget.platformViewBackdrop
                   ? _iconLayerKey
                   : widget.backgroundKey,
@@ -856,15 +862,14 @@ class TabIndicatorState extends State<TabIndicator>
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // 1. Glass Background (Blur / Frosted Glass Layer — Cached)
+                  // 中文说明：Premium 底板同样直接留在共享玻璃层中。这里不再
+                  // 插入无缓存收益的 RepaintBoundary，避免额外的合成层级。
                   Positioned.fill(
-                    child: RepaintBoundary(
-                      child: AdaptiveGlass.grouped(
-                        quality: widget.quality,
-                        platformViewBackdrop: widget.platformViewBackdrop,
-                        shape: _barShape,
-                        child: const SizedBox.expand(),
-                      ),
+                    child: AdaptiveGlass.grouped(
+                      quality: widget.quality,
+                      platformViewBackdrop: widget.platformViewBackdrop,
+                      shape: _barShape,
+                      child: const SizedBox.expand(),
                     ),
                   ),
 
@@ -1019,6 +1024,7 @@ class TabIndicatorState extends State<TabIndicator>
             settings: widget.indicatorSettings,
             borderRadius: indicatorRadius,
             pinchStrength: widget.indicatorPinchStrength,
+            restingGlassVisibility: _restingIndicatorGlassVisibility,
             backgroundKey: widget.platformViewBackdrop
                 ? _iconLayerKey
                 : widget.backgroundKey,

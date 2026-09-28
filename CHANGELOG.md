@@ -7,6 +7,10 @@
 - 将上游 v1.3.0 的 PlatformView 透传状态迁移到 float slot 44，避开 Poiesis 在 slots 32–43 使用的解析几何参数。
 - 新增默认开启的 `LiquidGlassSettings.refractionEnabled`：关闭后仅停止三条 Shader 路径的背景位移、色散和 pinch 采样，保留 blur、tint、光照、Fresnel、边缘与交互形状；同时支持主题覆盖和所有设置复制/合并路径。
 - 同步保留上游 v1.3.0 的原生按压反馈、零分配 glow 绘制和路由退出时的变换追踪修复。
+- 修复 EDR 改造误将 SDR 共用高光平台缩窄的问题：恢复 HDR 前的 SDR 胶囊/
+  月牙高光宽度，EDR 使用独立窄遮罩，且仅以 `hdrRange` 叠加超过 1.0 的能量。
+- iOS 高光白点不再按平台固定为 `1.22`；由宿主注入当前屏幕
+  `currentEDRHeadroom`，SDR、缺失和非法值回退 `1.0`，有效值封顶 `1.22`。
 
 ---
 

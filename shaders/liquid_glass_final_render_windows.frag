@@ -20,7 +20,7 @@ precision highp float;
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新全部四个入口（含本 Windows 入口），旧编译产物才不会被继续复用。
-// POIESIS_EDGE_TREATMENT_ADLER32: eed60717
+// POIESIS_EDGE_TREATMENT_ADLER32: 719ebab0
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -44,6 +44,10 @@ uniform float uPlatformViewMode;
 uniform float uRefractionEnabled;
 uniform float uTopRefractionOnly;
 uniform vec2 uCaptureConfig;
+// Slot 49：合并 hdr测试 后，Dart 宿主在所有平台都会写入最终高光白点。
+// 中文说明：Windows 有界合成仍是 SDR，只为与通用 Shader 保持完全相同的
+// 50 个 float 槽位而声明；下方把它限制到 1.0，不向 Windows 输出扩展亮度。
+uniform float uHighlightHeadroom;
 
 uniform sampler2D uBackgroundTexture;
 uniform sampler2D uGeometryTexture;
@@ -494,13 +498,15 @@ void main() {
     // alpha 也复用这一已避让值，与通用 Shader 的 passthrough 语义一致。
     float fresnel = fresnelBase * fresnelBase * uEdgeConfig.y
         * innerHighlightGate;
-    // 中文说明：main 分支的 host uniform 到 uCaptureConfig 为止，Windows
-    // 专用 Shader 必须维持完全相同的 49 个 float 槽位。此平台仍为 SDR，
-    // 高光上限固定为 1.0，不能把其他分支的 EDR headroom 槽合并进来。
+    // 中文说明：宿主 uniform 现在到 slot 49 的 uHighlightHeadroom 为止，
+    // Windows 专用 Shader 与通用版本维持完全相同的 50 个 float 槽位。此平台
+    // 仍为 SDR：headroom 即使收到大于 1.0 的值也会被限制到 SDR 白点。
+    // 真实参与运算可避免 Shader 编译器把“未使用 uniform”裁掉导致槽位错位。
     // 镜面与 ambient rim 同样属于白色反射，统一在描边内侧渐入。
+    float sdrWhitePoint = min(max(uHighlightHeadroom, 0.0), 1.0);
     float highlight = (specular * 0.20 + edge * uEdgeConfig.x * 0.10)
         * innerHighlightGate + fresnel * 0.12;
-    color = clamp(color + vec3(highlight), 0.0, 1.0);
+    color = clamp(color + vec3(highlight), 0.0, sdrWhitePoint);
 
     float luminance = dot(color, kLumaWeights);
     float whitenGate = mix(

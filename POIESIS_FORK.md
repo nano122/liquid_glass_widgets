@@ -108,10 +108,24 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
      各自保存 `edge_treatment.glsl` 规范化源码的 Adler-32 校验值。修改共享
      边缘算法时必须同步全部标记，既让入口内容变化以强制重编译，也由回归测试
      阻止旧 Shader 二进制被静默复用；
+   - Windows 有界合成 Shader 同样声明 slot 49 `uHighlightHeadroom`，保持与
+     通用最终 Shader 完全一致的 50 个 float 槽位；它把该值限制到 `1.0`
+     作为 SDR 白点，并继续省略区域高光 Pass，Windows 不输出扩展亮度；
+   - 原生 iOS 由宿主读取当前窗口 `UIScreen.currentEDRHeadroom`，组件库默认
+     `1.0`，只在实时值超过 SDR 白点时启用并封顶为 `1.22`；Web、非 iOS、
+     普通 SDR 屏幕与桥接缺失场景都写 `1.0`。SDR 的宽高光基底恢复为 HDR
+     改造前的胶囊 2dp/3dp 平台与圆形 12%/10% 月牙平台；EDR 另用独立的
+     0.75dp/0.50dp 窄遮罩，调整 HDR 核心不再改变 SDR 可见性。EDR 能量仍
+     拆成四层：主体使用 12% 可用 headroom，镜面、Fresnel 与顶部肩部使用
+     36%，仅顶部不足约 1dp 的核心使用完整实时白点；底部 EDR 峰值使用 50%
+     headroom。层间使用五次 smootherstep，预乘 alpha、结构边、折射不变；Premium
+     实时与 capture 使用 slot 49，Standard 使用 slot 37，交互指示器使用
+     slot 38，复用的 FragmentShader 不会继承上一 surface 的状态；
    - 解析式路径只在轮廓窄带增加八次 cache-free SDF ALU；Premium 多形状仅在
      同一窄带增加八个 cache-hot geometry 样本。上下区域高光只增加局部坐标
      `smoothstep`、背景逐通道 headroom 权重与颜色上限计算；背景折射、色散及 backdrop
-     纹理读取数量不变，也不新增 uniform、`BackdropFilter`、离屏纹理或渲染 Pass。
+     纹理读取数量不变。EDR 只新增一个 float uniform，不新增 `BackdropFilter`、
+     离屏纹理或渲染 Pass。
 8. Premium 多形状与复杂轮廓的 geometry texture 保持在渲染层本地坐标，并
    使用“屏幕物理像素 → 渲染层本地逻辑像素”的完整 2x3 逆仿射采样：
    - `uGeometryOffset/uGeometrySize` 保存纹理实际录制边界，不再保存旋转后丢失
@@ -163,6 +177,10 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
     - 默认投影配置在 `GlassDefaults` 集中收敛（12px 模糊，(0, 2) 偏移，亮色采用带微蓝冷调补偿的冷灰阴影 `Color(0x0E0E1C44)`，暗色采用 10% 黑色 `Color(0x1A000000)`），使暖底叠加后羽化带实测呈现 224, 224, 229（高出约 5 个点）的纯净冷调；
     - 阴影与玻璃按钮主体一同置于 `LiquidStretch` 内部，按压膨胀（1.04x）或拉伸时阴影同步放大，交互自然逼真；
     - `GlassButtonStyle.transparent` 样式自动跳过外部阴影，避免复合按钮组内部子项产生多重阴影叠压。
+13. `GlassTabBar.bottom` 的静止视觉与独立玻璃输入胶囊对齐：
+    - 底板从圆角矩形改为连续超椭圆，使顶部高光、肩部过渡与两端曲率使用同一套几何语义；
+    - 移除底板 `AdaptiveGlass.grouped` 外层无收益的 `RepaintBoundary`，让底板直接注册到共享玻璃层，减少无必要的合成隔离；
+    - `AnimatedGlassIndicator.restingGlassVisibility` 提供默认关闭的静止玻璃下限，底部导航使用 `0.18`，因此选中胶囊静止时保留轻微折射与材质高光，其他组件保持原行为。
 
 ## 回退边界
 

@@ -10,6 +10,7 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/widgets.dart';
 
 import '../internal/fragment_shader_extensions.dart';
+import '../internal/glass_highlight_headroom.dart';
 import '../liquid_glass_renderer.dart';
 import '../internal/render_liquid_glass_geometry.dart';
 import '../internal/snap_rect_to_pixels.dart';
@@ -542,6 +543,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
           ..setFloatUniforms(initialIndex: 47, (value) {
             value.setFloats([0.0, 0.0]);
           })
+          // Slot 49：只扩展 iOS EDR surface 的高光白点；普通玻璃体、
+          // 透明度与灰黑结构边仍保持原有 SDR 数值和合成顺序。
+          ..setFloatUniforms(initialIndex: 49, (value) {
+            value.setFloat(glassHighlightHeadroom);
+          })
           ..setImageSampler(
             1,
             geometryImage,
@@ -821,6 +827,11 @@ abstract class LiquidGlassRenderObject extends RenderProxyBox {
       // 遮罩使用与当前 ModalBarrier 相同的动画值，快照本身保持不变。
       ..setFloatUniforms(initialIndex: 47, (value) {
         value.setFloats([1.0, captureOverlayOpacity]);
+      })
+      // Slot 49：显式捕获与实时 backdrop 复用同一个 FragmentShader，
+      // 所以捕获路径也必须逐帧覆盖，避免复用实例残留上一 surface 的白点。
+      ..setFloatUniforms(initialIndex: 49, (value) {
+        value.setFloat(glassHighlightHeadroom);
       })
       ..setImageSampler(0, capture, filterQuality: FilterQuality.low)
       ..setImageSampler(

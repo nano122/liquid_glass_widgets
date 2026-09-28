@@ -5,6 +5,7 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
+import '../../src/renderer/internal/glass_highlight_headroom.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
@@ -1209,5 +1210,9 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     // Slot 37: 顶部折射限制。Shader 用 indicator 自身局部高度计算区域，
     // 因此拖动、缩放和 jelly 形变不会改变“顶部约 20%”的设计语义。
     _shader.setFloat(index++, _settings.topRefractionOnly ? 1.0 : 0.0);
+
+    // Slot 38: iOS EDR 只扩展 indicator 已有的方向光、Fresnel 与区域
+    // 高光；Web 和其他原生平台保持 1.0，避免向 SDR surface 泄漏超白值。
+    _shader.setFloat(index++, glassHighlightHeadroom);
   }
 }

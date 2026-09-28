@@ -314,7 +314,7 @@ GlassThemeVariant(
 
 | Platform | Renderer | Notes |
 |---|---|---|
-| iOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`) |
+| iOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`), Poiesis EDR highlights up to `1.22` |
 | Android (Vulkan) | Impeller (Vulkan) | Full 16-shape shader pipeline, chromatic aberration, async preloaded bytecode — matches iOS Metal |
 | Android (GLES fallback) | Impeller (GLES) | GLES-optimized 8-shape AST to prevent runtime driver compile stalls; zero ANR |
 | macOS | Impeller (Metal) | Full 16-shape shader pipeline, chromatic aberration, precompiled AOT (`.metallib`) |
@@ -326,7 +326,37 @@ Rendering-path detection is automatic. `LiquidGlassWidgets.initialize()` loads
 shader bytecode asynchronously via non-blocking I/O. Native Windows apps that
 explicitly force Premium select smaller ANGLE-safe geometry and composite
 programs before `FragmentProgram` loading; other platforms keep their existing
-rendering paths.
+rendering paths. The bounded Windows composite declares the same slot-49
+`uHighlightHeadroom` uniform as the full shader but clamps it to `1.0`, so
+Windows stays SDR. The Poiesis iOS EDR extension has the one host configuration
+requirement described below.
+
+### iOS EDR highlights (Poiesis fork)
+
+The Poiesis fork keeps the original, broad SDR highlight as an independent base
+and applies EDR only as a narrower additive layer. At the maximum `1.22`
+headroom, the glass body receives a subtle `~2.64%` multiplicative lift, broad
+specular/Fresnel shoulders stop at about `1.08`, and only a sub-1dp top core can
+reach `1.22`. The bottom EDR peak stays near `1.11`. Quintic transitions keep
+these layers continuous. A `1.0` headroom now reproduces the pre-EDR highlight
+width instead of inheriting the narrow HDR core geometry. Refraction, alpha,
+and structural rims are unchanged; Web and every non-iOS platform remain SDR.
+
+`GlassTabBar.bottom` uses a superellipse base surface and keeps 18% of the
+selected indicator's glass visibility at rest. The base is registered directly
+in its shared glass layer rather than behind an unnecessary repaint boundary,
+keeping the rendering hierarchy direct while the bar is idle.
+
+The host iOS app must explicitly enable both sides of the EDR pipeline:
+`FLTEnableWideGamut=true` creates Flutter's `BGRA10_XR` surface, and the Flutter
+view's `CAMetalLayer.wantsExtendedDynamicRangeContent` must be set to `true` once
+the scene is active. It must also pass a `highlightHeadroomResolver` to
+`LiquidGlassWidgets.initialize()` that reads the current window's
+`UIScreen.currentEDRHeadroom`. The library defaults to `1.0`, uses the measured
+value on an EDR display, and caps it at `1.22`, leaving margin below the
+approximately `1.25098` channel limit of Flutter's current iOS surface. An SDR
+display, missing resolver, or unavailable native bridge therefore retains the
+full SDR highlight without emitting extended-range values.
 
 ### Windows Impeller & Android Hardware Notes
 

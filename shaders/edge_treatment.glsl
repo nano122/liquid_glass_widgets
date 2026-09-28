@@ -290,8 +290,9 @@ float getInnerHighlightGate(
 
 // 中文说明：高光形态区分以容器长宽比（Aspect Ratio）为核心依据：
 // 1. 长条胶囊容器（aspectRatio >= 2.2，如长条底栏、搜索框、药丸按钮）：
-//    保留水平平直的高光带，顶部限制在 15%（封顶 10dp）、底部限制在 30%（封顶 20dp），
-//    峰值平台分别封顶在 2dp / 3dp，保持克制干练的长直反射。
+//    SDR 保留水平平直的高光带，顶部限制在 15%（封顶 10dp）、底部限制在
+//    30%（封顶 20dp），峰值平台分别封顶在 2dp / 3dp。EDR 另用独立遮罩，
+//    只把超过 1.0 的增量限制在 0.75dp / 0.50dp 的极窄核心。
 // 2. 圆形/正方形容器（aspectRatio -> 1.0，如各尺寸圆球、圆形进度指示器、按钮徽标）：
 //    启用贴合圆弧轮廓的“月牙弧光（Crescent Arc Highlight）”。高光等高线严格
 //    沿着顶部圆弧向内等距推进（d_crest = p.y + sqrt(max(1.0 - p.x^2, 0.0))），
@@ -310,11 +311,32 @@ const float kBottomAreaHighlightMaxLogicalHeight = 20.0;
 const float kTopAreaHighlightPlateauMaxLogicalHeight = 2.0;
 const float kBottomAreaHighlightPlateauMaxLogicalHeight = 3.0;
 
+// 中文说明：EDR 峰值拥有独立几何，绝不能再通过缩窄上面的共用常量来实现；
+// 否则 headroom=1.0 的普通 SDR 屏幕也会一起丢失可见高光。
+const float kTopAreaHighlightEdrPlateau = 0.012;
+const float kBottomAreaHighlightEdrPlateau = 0.008;
+const float kTopAreaHighlightEdrPlateauMaxLogicalHeight = 0.75;
+const float kBottomAreaHighlightEdrPlateauMaxLogicalHeight = 0.50;
+
 // 中文说明：圆形月牙贴合高光几何参数
 const float kCrescentTopExtent = 0.45;
 const float kCrescentTopPlateau = 0.12;
 const float kCrescentBottomExtent = 0.40;
 const float kCrescentBottomPlateau = 0.10;
+const float kCrescentTopEdrPlateau = 0.03;
+const float kCrescentBottomEdrPlateau = 0.02;
+
+// 中文说明：EDR 的 0.22 额外亮度拆成主体、肩部和核心三层。主体仅使用
+// 12% 的可用 headroom（1.22 时约为 1.0264），建立整块玻璃的通透感；
+// 顶部肩部使用 36%（约 1.079），最后 64% 只交给极窄核心。底部肩部更弱，
+// 且核心总量封顶在 50%（约 1.11），因此任何时候都不会抢过顶部主高光。
+const float kGlassBodyEdrShare = 0.12;
+const float kTopHighlightShoulderEdrShare = 0.36;
+const float kBottomHighlightShoulderEdrShare = 0.22;
+const float kBottomHighlightPeakEdrShare = 0.50;
+const float kCrescentBottomHighlightSdrStrength = 0.70;
+const float kTopHighlightCoreStart = 0.96;
+const float kBottomHighlightCoreStart = 0.98;
 
 const float kAreaHighlightMiddleBackdropGate = 0.25;
 const float kAreaHighlightDarkPeakGate = 0.50;
@@ -324,7 +346,21 @@ const float kAreaHighlightLightRiseStartLuma = 0.90;
 const float kAreaHighlightLightFullLuma = 1.00;
 const vec3 kAreaHighlightLumaWeights = vec3(0.2126, 0.7152, 0.0722);
 
-float getAdaptiveAreaHighlightExposureLift(
+float smootherstep01(float value) {
+    // 中文说明：五次平滑曲线在 0 与 1 两端的一阶、二阶导数都为零，
+    // 相比普通 smoothstep 更适合把 HDR 肩部送入狭窄核心，避免亮度折线和色带。
+    float x = clamp(value, 0.0, 1.0);
+    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
+}
+
+float getGlassHighlightShoulderWhitePoint(float highlightHeadroomMultiplier) {
+    // 中文说明：方向镜面与 Fresnel 都属于大面积高光，只允许使用肩部白点；
+    // 完整 1.22 峰值保留给下方区域高光的极窄顶部核心。
+    float hdrRange = max(highlightHeadroomMultiplier - 1.0, 0.0);
+    return 1.0 + hdrRange * kTopHighlightShoulderEdrShare;
+}
+
+vec4 getAdaptiveAreaHighlightExposureProfiles(
     vec2 localUV,
     vec2 glassLogicalSize
 ) {
@@ -359,6 +395,14 @@ float getAdaptiveAreaHighlightExposureLift(
         kBottomAreaHighlightPlateau,
         kBottomAreaHighlightPlateauMaxLogicalHeight / safeSize.y
     );
+    float effectiveTopEdrPlateau = min(
+        kTopAreaHighlightEdrPlateau,
+        kTopAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
+    );
+    float effectiveBottomEdrPlateau = min(
+        kBottomAreaHighlightEdrPlateau,
+        kBottomAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
+    );
 
     float capsuleTop = 1.0 - smoothstep(
         effectiveTopPlateau,
@@ -370,8 +414,16 @@ float getAdaptiveAreaHighlightExposureLift(
         1.0 - effectiveBottomPlateau,
         clampedUV.y
     );
-    float capsuleHighlight = clamp(capsuleTop + capsuleBottom, 0.0, 1.0);
-
+    float capsuleTopEdr = 1.0 - smoothstep(
+        effectiveTopEdrPlateau,
+        effectiveTopExtent,
+        clampedUV.y
+    );
+    float capsuleBottomEdr = smoothstep(
+        1.0 - effectiveBottomExtent,
+        1.0 - effectiveBottomEdrPlateau,
+        clampedUV.y
+    );
     // ---- 2. 圆形/球体贴合圆弧月牙高光（Crescent Arc Highlight） ----
     // 中文说明：将 UV 映射到以中心为原点的归一化圆盘 [-1, 1]
     vec2 p = (clampedUV - vec2(0.5)) * 2.0;
@@ -387,6 +439,15 @@ float getAdaptiveAreaHighlightExposureLift(
         inwardDepthTop
     );
     float topCrescent = pow(max(topCrescentProfile, 0.0), 0.85) * arcSpanTop;
+    float topCrescentEdrProfile = 1.0 - smoothstep(
+        kCrescentTopEdrPlateau,
+        kCrescentTopExtent,
+        inwardDepthTop
+    );
+    float topCrescentEdr = pow(
+        max(topCrescentEdrProfile, 0.0),
+        0.85
+    ) * arcSpanTop;
 
     // 底部托底月牙：计算片元相对于底部外圆弧的内向垂直深度
     float bottomArcY = sqrt(max(1.0 - p.x * p.x, 0.0));
@@ -397,13 +458,55 @@ float getAdaptiveAreaHighlightExposureLift(
         kCrescentBottomPlateau,
         inwardDepthBottom
     );
-    float bottomCrescent = pow(max(bottomCrescentProfile, 0.0), 0.90) * arcSpanBottom * 0.70;
+    float bottomCrescent = pow(max(bottomCrescentProfile, 0.0), 0.90)
+        * arcSpanBottom
+        * kCrescentBottomHighlightSdrStrength;
+    float bottomCrescentEdrProfile = smoothstep(
+        kCrescentBottomExtent,
+        kCrescentBottomEdrPlateau,
+        inwardDepthBottom
+    );
+    float bottomCrescentEdr = pow(
+        max(bottomCrescentEdrProfile, 0.0),
+        0.90
+    ) * arcSpanBottom;
 
-    float crescentHighlight = clamp(topCrescent + bottomCrescent, 0.0, 1.0);
-
-    // 中文说明：按圆形度因子在胶囊平直高光与圆形月牙高光之间连续插值
+    // 中文说明：xy 是恢复到 HDR 改造前宽度与强度的 SDR 顶/底基底；zw 是
+    // 独立窄 EDR 顶/底遮罩。两组都按圆形度连续插值，jelly 变形无跳变，
+    // 同时保证今后调 EDR 核心不会再影响 SDR 可见性。
     return clamp(
-        mix(capsuleHighlight, crescentHighlight, roundFactor),
+        mix(
+            vec4(
+                capsuleTop,
+                capsuleBottom,
+                capsuleTopEdr,
+                capsuleBottomEdr
+            ),
+            vec4(
+                topCrescent,
+                bottomCrescent,
+                topCrescentEdr,
+                bottomCrescentEdr
+            ),
+            roundFactor
+        ),
+        0.0,
+        1.0
+    );
+}
+
+float getAdaptiveAreaHighlightExposureLift(
+    vec2 localUV,
+    vec2 glassLogicalSize
+) {
+    // 中文说明：保留旧的标量入口供兼容调用，只合成 xy 的 SDR 基底；
+    // 圆形底部原有 70% 权重已经包含在 profile.y 中，胶囊底部保持旧版全强度。
+    vec4 profiles = getAdaptiveAreaHighlightExposureProfiles(
+        localUV,
+        glassLogicalSize
+    );
+    return clamp(
+        profiles.x + profiles.y,
         0.0,
         1.0
     );
@@ -453,27 +556,88 @@ float getVerticalAreaHighlightBackdropGate(vec3 safeBackdropColor) {
 vec3 applyVerticalAreaHighlight(
     vec3 color,
     vec3 backdropColor,
-    float highlightExposureLift,
-    float colorAlpha
+    vec4 highlightExposureProfiles,
+    float colorAlpha,
+    float highlightHeadroomMultiplier
 ) {
-    // 中文说明：背景色不再作为固定加法，而是作为剩余亮度空间的逐通道权重。
-    // 峰值平台可把几何曝光提高到 1.0；U 型亮度门控让暗背景高光降至 0.50 峰值以消除过亮，
-    // 中间背景压低到 25%，接近白色时再恢复可见高光。纯黑背景仍因逐通道权重
-    // 为零而不会凭空生白，彩色背景也会保留自身色相与纹理。headroom 已位于
-    // 当前 alpha 的合法范围，因此预乘分支无需再次乘 alpha，也不会在透明边缘漏色。
+    // 中文说明：先将此前的方向镜面与 Fresnel 收束到约 1.08 的肩部白点，
+    // 再给整块玻璃施加轻微乘法曝光。乘法方式保持背景色相与纹理，且 EDR
+    // 未启用时 hdrRange 为零，所有非 iOS 平台仍严格走原 SDR 数值。
     float safeColorAlpha = clamp(colorAlpha, 0.0, 1.0);
-    vec3 whitePoint = vec3(safeColorAlpha);
-    vec3 highlightHeadroom = max(whitePoint - color, vec3(0.0));
+    float hdrRange = max(highlightHeadroomMultiplier - 1.0, 0.0);
+    float shoulderWhitePointMultiplier = getGlassHighlightShoulderWhitePoint(
+        highlightHeadroomMultiplier
+    );
+    vec3 shoulderWhitePoint = vec3(
+        safeColorAlpha * shoulderWhitePointMultiplier
+    );
+    vec3 safeColor = clamp(color, vec3(0.0), shoulderWhitePoint);
+    vec3 bodyLiftedColor = min(
+        safeColor * (1.0 + hdrRange * kGlassBodyEdrShare),
+        shoulderWhitePoint
+    );
+
+    // 中文说明：SDR 区域反射严格使用恢复后的宽基底（xy），继续沿用背景
+    // 逐通道权重和 U 型亮度门控；HDR 的窄遮罩（zw）不会参与这个计算。
     vec3 backdropWeight = clamp(backdropColor, 0.0, 1.0);
     float backdropExposureGate = getVerticalAreaHighlightBackdropGate(
         backdropWeight
     );
-    float safeExposureLift = clamp(highlightExposureLift, 0.0, 1.0);
-    vec3 backgroundRelativeLift = highlightHeadroom
+    vec2 safeSdrExposureProfile = clamp(
+        highlightExposureProfiles.xy,
+        0.0,
+        1.0
+    );
+    vec2 safeEdrExposureProfile = clamp(
+        highlightExposureProfiles.zw,
+        0.0,
+        1.0
+    );
+    float sdrExposure = clamp(
+        safeSdrExposureProfile.x + safeSdrExposureProfile.y,
+        0.0,
+        1.0
+    );
+    vec3 sdrHeadroom = max(
+        vec3(safeColorAlpha) - bodyLiftedColor,
+        vec3(0.0)
+    );
+    vec3 withSdrHighlight = bodyLiftedColor + sdrHeadroom
         * backdropWeight
         * backdropExposureGate
-        * safeExposureLift;
-    return color + backgroundRelativeLift;
+        * sdrExposure;
+
+    // 中文说明：五次 smootherstep 生成无折点肩部；只有遮罩最后 4% 的顶部、
+    // 最后 2% 的底部进入核心。顶部核心可用完整 1.22，底部核心最多 1.11。
+    // 最终仍乘背景权重与亮度门控，避免暗背景凭空出现一块白光。
+    float topShoulder = smootherstep01(safeEdrExposureProfile.x);
+    float bottomShoulder = smootherstep01(safeEdrExposureProfile.y);
+    float topCore = smootherstep01(
+        (safeEdrExposureProfile.x - kTopHighlightCoreStart)
+            / (1.0 - kTopHighlightCoreStart)
+    );
+    float bottomCore = smootherstep01(
+        (safeEdrExposureProfile.y - kBottomHighlightCoreStart)
+            / (1.0 - kBottomHighlightCoreStart)
+    );
+    float topEdrEnergy = topShoulder * kTopHighlightShoulderEdrShare
+        + topCore * (1.0 - kTopHighlightShoulderEdrShare);
+    float bottomEdrEnergy = bottomShoulder * kBottomHighlightShoulderEdrShare
+        + bottomCore * (
+            kBottomHighlightPeakEdrShare
+                - kBottomHighlightShoulderEdrShare
+        );
+    float edrEnergy = clamp(max(topEdrEnergy, bottomEdrEnergy), 0.0, 1.0);
+    vec3 edrWhitePoint = vec3(
+        safeColorAlpha * (1.0 + hdrRange * edrEnergy)
+    );
+    // 中文说明：EDR 层只能增加“超过 1.0”的 hdrRange。旧实现从目标白点
+    // 减去当前 SDR 颜色，导致 hdrRange=0 时窄核心仍二次消费 SDR headroom；
+    // 这里直接按额外范围分配，确保 1.0 路径与 HDR 改造前逐值一致。
+    vec3 edrLift = vec3(safeColorAlpha * hdrRange * edrEnergy)
+        * backdropWeight
+        * backdropExposureGate;
+    return min(withSdrHighlight + edrLift, edrWhitePoint);
 }
 
 vec3 applyDualLayerRim(
