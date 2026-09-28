@@ -11,6 +11,7 @@ import '../../src/engine/internal/transform_tracking_repaint_boundary_mixin.dart
 import '../../src/renderer/internal/glass_highlight_headroom.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
 import '../../src/renderer/glass_backdrop_kernel.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 import '../../theme/glass_theme.dart';
 
 import 'inherited_liquid_glass.dart';
@@ -124,6 +125,13 @@ class LightweightLiquidGlass extends StatefulWidget {
   static ui.FragmentProgram? _cachedProgram;
   static bool _isPreparing = false;
 
+  /// 已缓存程序是否为 `shaders/upstream/` 下的上游 1.7.2 原版。
+  ///
+  /// 中文说明：uniform 写入布局必须跟随“实际加载的程序”，而不是每帧重新
+  /// 读取 [PoiesisForkPolicy]。生产环境两者始终一致；测试切换覆盖值时，
+  /// preWarm 会按新策略重新加载，渲染对象也按本字段选择布局，避免错位写入。
+  static bool _cachedProgramIsUpstream = false;
+
   // On native: Share one shader instance (efficient)
   // On web: Each widget needs its own instance (CanvasKit requirement)
   static ui.FragmentShader? _sharedShader; // Native only
@@ -150,6 +158,7 @@ class LightweightLiquidGlass extends StatefulWidget {
   @visibleForTesting
   static void resetForTesting() {
     _cachedProgram = null;
+    _cachedProgramIsUpstream = false;
     _sharedShader = null;
     _isPreparing = false;
     _dummyImage?.dispose();
@@ -157,11 +166,20 @@ class LightweightLiquidGlass extends StatefulWidget {
   }
 
   /// Global pre-warm method - loads and compiles the shader program.
+  ///
+  /// 中文说明：Impeller 加载 Poiesis 版 `shaders/lightweight_glass.frag`；
+  /// Skia/Web 加载逐字节复制的上游原版 `shaders/upstream/lightweight_glass.frag`。
+  /// 已缓存的程序与当前策略不一致时（仅测试切换覆盖值会发生）重新加载。
   static Future<void> preWarm() async {
-    if (_cachedProgram != null || _isPreparing) return;
+    final wantUpstream = !PoiesisForkPolicy.patchesEnabled;
+    if (_isPreparing) return;
+    if (_cachedProgram != null && _cachedProgramIsUpstream == wantUpstream) {
+      return;
+    }
     _isPreparing = true;
-    const path = 'packages/liquid_glass_widgets/shaders/lightweight_glass.frag';
-    const testPath = 'shaders/lightweight_glass.frag';
+    final testPath =
+        PoiesisForkPolicy.lightweightShaderPath('lightweight_glass.frag');
+    final path = 'packages/liquid_glass_widgets/$testPath';
 
     try {
       ui.FragmentProgram program;
@@ -172,6 +190,8 @@ class LightweightLiquidGlass extends StatefulWidget {
         program = await ui.FragmentProgram.fromAsset(testPath);
       }
       _cachedProgram = program;
+      _cachedProgramIsUpstream = wantUpstream;
+      debugPrint('[LightweightGlass] Loaded $testPath');
 
       // On native platforms, create the shared shader instance
       if (!kIsWeb) {
@@ -396,9 +416,9 @@ class _LightweightLiquidGlassState extends State<LightweightLiquidGlass>
 
   Future<void> _initShader() async {
     // Ensure program is loaded
-    if (LightweightLiquidGlass._cachedProgram == null) {
-      await LightweightLiquidGlass.preWarm();
-    }
+    // 中文说明：preWarm 自身会在“已缓存且变体与策略一致”时立即返回，因此
+    // 这里无条件调用即可；只有测试切换 PoiesisForkPolicy 覆盖值时才会重载。
+    await LightweightLiquidGlass.preWarm();
 
     // On web, create a per-widget shader instance
     if (kIsWeb && LightweightLiquidGlass._cachedProgram != null) {
@@ -624,6 +644,12 @@ class _RenderLightweightGlass extends RenderProxyBox
   LiquidGlassSettings get settings => _settings;
   set settings(LiquidGlassSettings value) {
     if (_settings == value) return;
+    // Invalidate cached filter when blur or saturation changes.
+    // 中文说明：仅上游模式（Skia/Web）使用本地缓存滤镜，与原版保持一致。
+    if (value.effectiveBlur != _settings.effectiveBlur ||
+        value.effectiveSaturation != _settings.effectiveSaturation) {
+      _cachedBlurFilter = null;
+    }
     // Recompute trig only when lightAngle actually changes.
     if (value.lightAngle != _settings.lightAngle) {
       _cachedLightCos = math.cos(value.lightAngle);
@@ -723,8 +749,60 @@ class _RenderLightweightGlass extends RenderProxyBox
   double _cachedLightCos;
   double _cachedLightSin;
 
-  // 中文说明：滤镜对象由 GlassBackdropKernel 跨组件缓存；这里仅持有可跨帧
-  // 复用的 engine layer，避免重复缓存同一份 blur/saturation 组合。
+  // 中文说明：Impeller（Poiesis）下滤镜对象由 GlassBackdropKernel 跨组件
+  // 缓存，这里仅持有可跨帧复用的 engine layer；Skia/Web 回到上游 1.7.2 的
+  // 每个 RenderObject 本地缓存（下方 _getBlurFilter，原样保留）。
+
+  // ── Cached backdrop filter (Task 1.2) ─────────────────────────────────────
+  // The composed blur+saturation ImageFilter is rebuilt only when blur sigma
+  // or saturation changes — not on every frame. Eliminates a 20-element
+  // List<double> allocation + 2 object allocations per frame per glass widget.
+  ui.ImageFilter? _cachedBlurFilter;
+  double _cachedFilterBlur = -1;
+  double _cachedFilterSat = -1;
+
+  /// Returns the cached blur+saturation filter, rebuilding only when the
+  /// blur sigma or saturation has changed since the last call.
+  ui.ImageFilter _getBlurFilter(double blurSigma, double sat) {
+    if (_cachedBlurFilter != null &&
+        _cachedFilterBlur == blurSigma &&
+        _cachedFilterSat == sat) {
+      return _cachedBlurFilter!;
+    }
+
+    // Standard saturation ColorFilter matrix (ITU-R BT.709 luminance weights).
+    const double rw = 0.2126, gw = 0.7152, bw = 0.0722;
+    final ui.ColorFilter satFilter = ui.ColorFilter.matrix(<double>[
+      rw + (1 - rw) * sat,
+      gw - gw * sat,
+      bw - bw * sat,
+      0,
+      0,
+      rw - rw * sat,
+      gw + (1 - gw) * sat,
+      bw - bw * sat,
+      0,
+      0,
+      rw - rw * sat,
+      gw - gw * sat,
+      bw + (1 - bw) * sat,
+      0,
+      0,
+      0,
+      0,
+      0,
+      1,
+      0,
+    ]);
+
+    _cachedBlurFilter = ui.ImageFilter.compose(
+      outer: satFilter,
+      inner: ui.ImageFilter.blur(sigmaX: blurSigma, sigmaY: blurSigma),
+    );
+    _cachedFilterBlur = blurSigma;
+    _cachedFilterSat = sat;
+    return _cachedBlurFilter!;
+  }
 
   // Only force compositing when we actually push a BackdropFilterLayer
   // (shader available AND blur > 0 AND not skipped by ancestor blur).
@@ -765,8 +843,25 @@ class _RenderLightweightGlass extends RenderProxyBox
       // We replicate this by composing: outer=saturationFilter, inner=blurFilter.
       // Result: the blurred background seen through Standard glass is saturated
       // identically to Premium — no background texture capture required.
-      //
-      // 滤镜由 GlassBackdropKernel 按 sigma 与饱和度跨组件复用；设置改变时
+      if (!PoiesisForkPolicy.patchesEnabled) {
+        // 中文说明：Skia/Web 严格回到上游 1.7.2：本地缓存滤镜，每帧新建
+        // BackdropFilterLayer，不保留跨帧 layer，也不收紧 childPaintBounds。
+        _backdropFilterLayerHandle.layer = null;
+        final filter = _getBlurFilter(
+          blurSigma,
+          _settings.effectiveSaturation,
+        );
+        context.pushLayer(
+          BackdropFilterLayer(filter: filter),
+          (context, offset) {
+            _paintGlassContent(context, offset);
+          },
+          offset,
+        );
+        return;
+      }
+
+      // Impeller（Poiesis）：滤镜由 GlassBackdropKernel 按 sigma 与饱和度跨组件复用；设置改变时
       // 直接索引对应实例，不再由每个 RenderObject 各自分配矩阵与滤镜。
       final filter = GlassBackdropKernel.exact(
         sigma: blurSigma,
@@ -1031,6 +1126,15 @@ class _RenderLightweightGlass extends RenderProxyBox
     // Matches the uniform wired in liquid_glass_render.frag via uEdgeConfig.y.
     // Default 1.0 = calibrated iOS 26 baseline (0.10 * adaptiveStrength in shader).
     shader.setFloat(index++, _settings.fresnelStrength.clamp(0.0, 4.0));
+
+    if (LightweightLiquidGlass._cachedProgramIsUpstream) {
+      // 中文说明：上游 1.7.2 原版 Shader 布局——fresnel 之后直接是
+      // 34: uBodyMode，没有 Poiesis 的 uDpr/折射开关/headroom。
+      // 34: uBodyMode — 0.0 = adaptive, 1.0 = clear.
+      shader.setFloat(
+          index++, _settings.bodyMode == GlassBodyMode.clear ? 1.0 : 0.0);
+      return;
+    }
 
     // 34: uDpr — 仅用于把描边 logical px 目标换算为屏幕物理像素；不能
     // 复用 physicalScale，因为后者还包含横纵不同的 jelly/祖先变换。

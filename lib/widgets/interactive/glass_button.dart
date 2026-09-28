@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/cupertino.dart';
 import '../../constants/glass_defaults.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 
 import '../../theme/glass_theme.dart';
 import '../../theme/glass_theme_data.dart';
@@ -385,6 +386,9 @@ class GlassButton extends StatefulWidget {
   /// 绝不绘制到按钮内部，从而避免半透明玻璃底色被阴影污染，保持通透纯净。
   ///
   /// 默认为 true。
+  ///
+  /// 仅在 Impeller（Poiesis 补丁启用）时生效；Skia/Web 回到上游 1.7.2，
+  /// 该参数与 [outerShadow] 均被忽略，按钮不绘制额外外投影。
   final bool enableOuterShadow;
 
   /// 可选的自定义外部投影 [BoxShadow]。
@@ -965,17 +969,25 @@ class _GlassButtonState extends State<GlassButton>
     //   expensive Impeller pipeline.
     // - Standard: skipped when stretched as well. On Impeller it now shares
     //   the native full glass layer with Premium, so scaling a cached texture
-    //   would have the same edge artefacts; on Skia/Web this remains harmless.
-
+    //   would have the same edge artefacts.
+    //
+    // 中文说明：Standard + stretch 跳过 RepaintBoundary 是 Poiesis 针对
+    // Impeller 原生全玻璃层的补丁；Skia/Web 回到上游 1.7.2 规则，只有
+    // Premium + stretch 才跳过（轻量 Shader 在边界内会按正确分辨率重绘）。
+    final bool patchesEnabled = PoiesisForkPolicy.patchesEnabled;
     final bool hasStretch = widget.stretch > 0;
     final bool skipBoundary = effectiveQuality == GlassQuality.minimal ||
-        hasStretch;
+        (patchesEnabled
+            ? hasStretch
+            : (effectiveQuality == GlassQuality.premium && hasStretch));
 
-    // 构建外部阴影（仅在启用且非透明样式时渲染）
+    // 构建外部阴影（仅 Impeller 且启用、非透明样式时渲染）
     // 阴影由 GlassButtonOuterShadowPainter 采用 evenOdd 反向镂空绘制，
     // 保证 100% 仅呈现在按钮边界之外，绝不污染按钮内部半透明玻璃底色。
+    // Skia/Web 与上游一致不插入 Stack/CustomPaint，保持原版 widget 结构。
     final Widget surfacedGlassWidget;
-    if (widget.enableOuterShadow &&
+    if (patchesEnabled &&
+        widget.enableOuterShadow &&
         widget.style != GlassButtonStyle.transparent) {
       final effectiveOuterShadow = widget.outerShadow ??
           GlassDefaults.defaultOuterShadow(

@@ -87,9 +87,10 @@ class LiquidGlassSettings {
     this.glowIntensity = 0.75,
     this.specularSharpness = GlassSpecularSharpness.medium,
     this.standardOpacityMultiplier = 1.0,
-    // 中文说明：应用当前关闭所有玻璃外投影。字段仍保留以兼容上游 API，
-    // 但 effectiveShadow 会统一返回空列表，避免显式 elevation 绕过视觉策略。
-    this.shadowElevation = 0.0,
+    // 中文说明：默认值与上游 1.7.2 保持一致（1.0），保证 Skia/Web 渲染器
+    // 回到原版时默认带 Apple 风格外投影；Impeller 上的 Poiesis 无阴影策略
+    // 由 effectiveShadow 统一拦截，不再依赖这里的默认值。
+    this.shadowElevation = 1.0,
     this.shadow,
     this.whitenStrength = 0.0,
     this.whitenGated = true,
@@ -177,8 +178,8 @@ class LiquidGlassSettings {
           glassColor: glassColor,
           specularSharpness: specularSharpness,
           standardOpacityMultiplier: standardOpacityMultiplier,
-          // shadowElevation and shadow use their defaults (0.0 / null); the
-          // fork's centralized policy keeps all glass surfaces shadowless.
+          // shadowElevation and shadow use their defaults (1.0 / null).
+          // 中文说明：Impeller 上由 Poiesis 策略统一去掉外投影，Skia/Web 与上游一致。
         );
 
   /// Retrieves the nearest [LiquidGlassSettings] from the widget tree.
@@ -398,8 +399,10 @@ class LiquidGlassSettings {
   /// For full control over shadow appearance, use [shadow] instead.
   /// If [shadow] is non-null, [shadowElevation] is ignored.
   ///
-  /// Defaults to 0.0 in the Poiesis fork because outward glass drop shadows
-  /// are disabled by the centralized visual policy.
+  /// Defaults to 1.0.
+  ///
+  /// 中文说明：Poiesis 在 Impeller 上通过 [effectiveShadow] 统一关闭外投影，
+  /// 该字段不会生效；Skia/Web 与上游一致按此倍率缩放阴影。
   final double shadowElevation;
 
   /// Custom light-mode drop shadow for glass surfaces.
@@ -408,9 +411,10 @@ class LiquidGlassSettings {
   /// The shadows are inverse-clipped to only appear outside the glass
   /// boundary, preventing the glass from blurring its own shadow.
   ///
-  /// When null (the default), the built-in Apple-matching shadow would be used,
-  /// scaled by [shadowElevation]. The Poiesis fork currently suppresses both
-  /// this override and the built-in shadow through [effectiveShadow].
+  /// When null (the default), the built-in Apple-matching shadow is used,
+  /// scaled by [shadowElevation]. On Impeller the Poiesis fork suppresses both
+  /// this override and the built-in shadow through [effectiveShadow]; Skia/Web
+  /// keeps the upstream behavior.
   ///
   /// Has no effect in dark mode.
   final List<BoxShadow>? shadow;
@@ -425,8 +429,9 @@ class LiquidGlassSettings {
   /// its shadow with it, or the elevation stays at full strength underneath
   /// vanishing glass and then snaps away with it.
   List<BoxShadow> get effectiveShadow {
-    // 中文说明：Poiesis 统一禁用玻璃向外投射的阴影；先拦截显式 shadow，
-    // 再保留上游按 visibility 淡出的完整逻辑，避免重新启用策略后出现跳变。
+    // 中文说明：Poiesis 在 Impeller 上统一禁用玻璃向外投射的阴影，先拦截
+    // 显式 shadow；Skia/Web 下 dropShadowsEnabled 为 true，完整走上游按
+    // visibility 淡出的逻辑。
     if (!GlassShadow.dropShadowsEnabled) return const <BoxShadow>[];
     if (shadow != null) {
       if (visibility >= 1.0) return shadow!;

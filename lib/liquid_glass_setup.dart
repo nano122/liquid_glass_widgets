@@ -13,6 +13,7 @@ import 'src/engine/multi_shader_builder.dart';
 // 中文说明：Poiesis 的 iOS EDR 高光 headroom 桥接仍放在 renderer/internal，
 // 上游 1.5.0 起把引擎迁移到 src/engine，这里只同步 multi_shader_builder 的新路径。
 import 'src/renderer/internal/glass_highlight_headroom.dart';
+import 'src/renderer/poiesis_fork_policy.dart';
 import 'widgets/shared/glass_adaptive_scope.dart';
 import 'widgets/shared/glass_effect.dart';
 import 'widgets/shared/glass_accessibility_scope.dart';
@@ -117,6 +118,9 @@ class LiquidGlassWidgets {
     Future<double?> Function()? highlightHeadroomResolver,
   }) async {
     debugPrint('[LiquidGlass] Initializing library...');
+    // 中文说明：打印一次渲染器分流结果（Impeller→Poiesis 补丁，
+    // Skia/Web→上游 1.7.2 原版），便于真机日志排查走的是哪条链路。
+    PoiesisForkPolicy.logModeOnce();
 
     // 中文说明：先解析当前 surface 的真实高光白点，再创建/预热 Shader。
     // resolver 由宿主注入且只在原生 iOS 调用；普通 SDR 屏幕会得到精确 1.0，

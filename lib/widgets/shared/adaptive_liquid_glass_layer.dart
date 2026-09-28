@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:flutter/cupertino.dart';
 
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 
 import '../../theme/glass_theme.dart';
 import '../../theme/glass_theme_data.dart';
@@ -184,14 +185,26 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
     // -------------------------------------------------------------------------
     // 中文说明：Poiesis 的 Standard 与 Premium 在 Impeller 上共用完整原生
     // 根层；质量差异留在 settings 内，避免 Standard 子玻璃各自采样不同背景。
-    final bool useFullRenderer =
-        AdaptiveLiquidGlassLayer.shouldUseNativeRenderer(
-          isImpeller: AdaptiveLiquidGlassLayer._canUseImpeller,
-          platformViewBackdrop: widget.platformViewBackdrop,
-          quality: effectiveQuality,
-        );
+    //
+    // Skia/Web 严格回到上游 1.7.2：只有 minimal 或 platformViewBackdrop
+    // 透传；Standard/Premium 仍包一层 LiquidGlassLayer（在 Skia 上它只提供
+    // LiquidGlassRenderScope 与几何链接）和 PremiumGlassTracker，并且只有
+    // Impeller + Premium 才插入 blend group。
+    final bool patchesEnabled = PoiesisForkPolicy.patchesEnabled;
+    final bool useFullRenderer = patchesEnabled
+        ? AdaptiveLiquidGlassLayer.shouldUseNativeRenderer(
+            isImpeller: AdaptiveLiquidGlassLayer._canUseImpeller,
+            platformViewBackdrop: widget.platformViewBackdrop,
+            quality: effectiveQuality,
+          )
+        : AdaptiveLiquidGlassLayer._canUseImpeller &&
+            effectiveQuality == GlassQuality.premium;
+    final bool passThrough = patchesEnabled
+        ? !useFullRenderer
+        : effectiveQuality == GlassQuality.minimal ||
+            widget.platformViewBackdrop;
 
-    if (!useFullRenderer) {
+    if (passThrough) {
       return GlassIsolationScope(
         isolated: false,
         child: InheritedLiquidGlass(
@@ -229,12 +242,14 @@ class _AdaptiveLiquidGlassLayerState extends State<AdaptiveLiquidGlassLayer> {
             isBlurProvidedByAncestor:
                 false, // Root never provides the blur; containers do.
             // Standard 与 Premium 在 Impeller 下共用同一个 blend group，保证
-            // 子玻璃从同一原生 backdrop 采样；Skia/Web 已在上面的回退分支
-            // 中直接使用 LightweightLiquidGlass。
-            child: LiquidGlassBlendGroup(
-              blend: widget.blendAmount,
-              child: keyedContent,
-            ),
+            // 子玻璃从同一原生 backdrop 采样；Skia/Web（上游模式）只有
+            // useFullRenderer 为 true 时才插入，与原版一致。
+            child: useFullRenderer
+                ? LiquidGlassBlendGroup(
+                    blend: widget.blendAmount,
+                    child: keyedContent,
+                  )
+                : keyedContent,
           ),
         ),
       ),

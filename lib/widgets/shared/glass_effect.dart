@@ -7,6 +7,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/rendering.dart';
 import '../../src/renderer/internal/glass_highlight_headroom.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 
 import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter/scheduler.dart';
@@ -95,6 +96,12 @@ class GlassEffect extends StatefulWidget {
   static ui.FragmentProgram? _cachedProgram;
   static bool _isPreparing = false;
 
+  /// 已缓存程序是否为 `shaders/upstream/` 下的上游 1.7.2 原版。
+  ///
+  /// 中文说明：RenderObject 的 uniform 布局跟随实际加载的程序（上游只写到
+  /// slot 33，Poiesis 写到 38），避免策略切换时布局与程序错位。
+  static bool _cachedProgramIsUpstream = false;
+
   /// Detects if Impeller rendering engine is active
   static bool get _canUseImpeller => ui.ImageFilter.isShaderFilterSupported;
 
@@ -149,18 +156,27 @@ class GlassEffect extends StatefulWidget {
   @visibleForTesting
   static void resetForTesting() {
     _cachedProgram = null;
+    _cachedProgramIsUpstream = false;
     _isPreparing = false;
     _dummyImage?.dispose();
     _dummyImage = null;
   }
 
   /// Pre-warms the shaders for this effect.
+  ///
+  /// 中文说明：Impeller 加载 Poiesis 版 Shader；Skia/Web 加载逐字节复制的
+  /// 上游原版 `shaders/upstream/interactive_indicator.frag`。已缓存程序与当前
+  /// 策略不一致时（仅测试切换覆盖值会发生）重新加载。
   static Future<void> preWarm() async {
-    if (_cachedProgram != null || _isPreparing) return;
+    final wantUpstream = !PoiesisForkPolicy.patchesEnabled;
+    if (_isPreparing) return;
+    if (_cachedProgram != null && _cachedProgramIsUpstream == wantUpstream) {
+      return;
+    }
     _isPreparing = true;
-    const path =
-        'packages/liquid_glass_widgets/shaders/interactive_indicator.frag';
-    const testPath = 'shaders/interactive_indicator.frag';
+    final testPath =
+        PoiesisForkPolicy.lightweightShaderPath('interactive_indicator.frag');
+    final path = 'packages/liquid_glass_widgets/$testPath';
 
     try {
       ui.FragmentProgram program;
@@ -171,6 +187,8 @@ class GlassEffect extends StatefulWidget {
         program = await ui.FragmentProgram.fromAsset(testPath);
       }
       _cachedProgram = program;
+      _cachedProgramIsUpstream = wantUpstream;
+      debugPrint('[GlassEffect] Loaded $testPath');
     } catch (e) {
       debugPrint('[GlassEffect] Pre-warm failed: $e');
     } finally {
@@ -299,6 +317,16 @@ class _GlassEffectState extends State<GlassEffect>
         //     '[GlassEffect] 📸 Starting capture loop. Intensity: ${widget.interactionIntensity.toStringAsFixed(2)}');
       }
     } else {
+      if (!PoiesisForkPolicy.patchesEnabled) {
+        // 中文说明：Skia/Web 严格回到上游 1.7.2：只有 ticker 正在运行
+        // （即刚结束交互）时才停止并释放快照。
+        if (_ticker.isActive) {
+          _ticker.stop();
+          _backgroundImage?.dispose();
+          _backgroundImage = null;
+        }
+        return;
+      }
       if (_ticker.isActive) {
         _ticker.stop();
       }
@@ -1030,8 +1058,16 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     final blurSigma = _settings.effectiveBlur;
     if (blurSigma > 0) {
       final filter = _getInteractiveFilter(blurSigma);
-      final blurLayer = (_blurLayerHandle.layer ??= BackdropFilterLayer())
-        ..filter = filter;
+      // 中文说明：Impeller（Poiesis）跨帧复用 BackdropFilterLayer；Skia/Web
+      // 回到上游 1.7.2，每帧新建 layer 且不保留 handle。
+      final BackdropFilterLayer blurLayer;
+      if (PoiesisForkPolicy.patchesEnabled) {
+        blurLayer = (_blurLayerHandle.layer ??= BackdropFilterLayer())
+          ..filter = filter;
+      } else {
+        _blurLayerHandle.layer = null;
+        blurLayer = BackdropFilterLayer(filter: filter);
+      }
 
       // Clip blur to the pill shape so the BackdropFilterLayer does not bleed
       // into the expansion zone around the jelly-physics draw rect.
@@ -1221,6 +1257,10 @@ class _RenderInteractiveIndicator extends RenderProxyBox {
     // Slot 33: edgeAbsorption — Beer-Lambert meniscus rim darkening [0..1].
     // Passed directly — what the caller sets is what the shader gets.
     _shader.setFloat(index++, _edgeAbsorption.clamp(0.0, 1.0));
+
+    // 中文说明：上游 1.7.2 原版 Shader 到 slot 33 为止；以下 34–38 是
+    // Poiesis 补丁 uniform，只写给 Poiesis 版程序。
+    if (GlassEffect._cachedProgramIsUpstream) return;
 
     // Slot 34: 解析式凹透镜 pinch。Premium 旧管线从 geometry texture
     // 推导位移；快速路径直接使用同一动画强度在 SDF 坐标中计算。

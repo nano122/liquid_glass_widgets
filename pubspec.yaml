@@ -50,3 +50,9 @@ flutter:
     # 合成；uniform 顺序仍与通用 liquid_glass_render.frag 保持一致。
     - shaders/liquid_glass_final_render_windows.frag
     - shaders/progressive_blur.frag
+    # 中文说明：Skia/Web 渲染器使用官方 1.7.2（4d3f4dfe）原版轻量 Shader。
+    # 这两个文件与 gles_compat.glsl 由 `git show 4d3f4dfe:shaders/<name>`
+    # 逐字节提取，禁止手工修改；Impeller 继续使用上面的 Poiesis 版本。
+    # 选择逻辑见 lib/src/renderer/poiesis_fork_policy.dart。
+    - shaders/upstream/lightweight_glass.frag
+    - shaders/upstream/interactive_indicator.frag

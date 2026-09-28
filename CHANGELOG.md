@@ -8,6 +8,9 @@
 - 上游 #333（嵌套 BackdropFilter 的 compositor pass 原点）同步到 Poiesis 的解析式/纹理逆仿射：平移项折算外层 pass 原点，paint 与合成阶段的变换同步共用同一换算。
 - 上游 #337 边缘折射上限改用三条几何分支统一换算的尺寸，并保留 Poiesis 的折射区域门控（关闭/仅顶部时仍跳过 refract 计算）。
 - FrostedFallback 饱和度矩阵改用 Rec.709 权重（上游 1.4.2），底栏背景支持上游 1.6 的 `backgroundQuality`，指示器改用上游 #344 的亮度自适应颜色。
+- 新增 `PoiesisForkPolicy` 渲染器分流，Poiesis 补丁只在 Impeller（`ImageFilter.isShaderFilterSupported`）上启用。
+  - Skia/Web 回到官方 1.7.2：外投影、Badge/Toast 投影、底栏圆角矩形、FrostedFallback、`AdaptiveLiquidGlassLayer` 直通条件、`applyTo` 等。
+  - 轻量 Shader 改从逐字节复制的 `shaders/upstream/` 加载，uniform 布局跟随实际加载的程序。
 
 # 1.7.2
 

@@ -3,6 +3,7 @@ import 'dart:ui' show lerpDouble;
 import 'package:flutter/widgets.dart';
 
 import '../src/engine/liquid_glass_settings.dart';
+import '../src/renderer/poiesis_fork_policy.dart';
 import '../types/glass_specular_sharpness.dart';
 
 /// A partial override of [LiquidGlassSettings] for use in [GlassThemeVariant].
@@ -112,9 +113,38 @@ class GlassThemeSettings {
   /// Only non-null fields in this override replace the corresponding
   /// value in [base]. Null fields leave [base]'s value untouched.
   LiquidGlassSettings applyTo(LiquidGlassSettings base) {
-    // 中文说明：从 base.copyWith 合并，而不是重新调用完整构造器。这样主题只
-    // 覆盖自己声明的字段，pinch、PlatformView 模式及后续新增字段都不会因为
-    // 构造器默认值而被静默重置，符合 partial override 的契约。
+    // 中文说明：Skia/Web 严格回到上游 1.7.2：用完整构造器重建设置。
+    // 上游写法会把 pinchStrength、platformViewMode、bodyMode 等未列出的
+    // 字段重置为构造器默认值，这是原版既有行为，这里有意保留。
+    if (!PoiesisForkPolicy.patchesEnabled) {
+      return LiquidGlassSettings(
+        visibility: visibility ?? base.visibility,
+        glassColor: glassColor ?? base.glassColor,
+        thickness: thickness ?? base.thickness,
+        blur: blur ?? base.blur,
+        chromaticAberration: chromaticAberration ?? base.chromaticAberration,
+        lightAngle: lightAngle ?? base.lightAngle,
+        lightIntensity: lightIntensity ?? base.lightIntensity,
+        ambientStrength: ambientStrength ?? base.ambientStrength,
+        ambientRim: base.ambientRim,
+        fresnelStrength: fresnelStrength ?? base.fresnelStrength,
+        refractiveIndex: refractiveIndex ?? base.refractiveIndex,
+        saturation: saturation ?? base.saturation,
+        glowIntensity: base.glowIntensity,
+        specularSharpness: specularSharpness ?? base.specularSharpness,
+        standardOpacityMultiplier: base.standardOpacityMultiplier,
+        shadowElevation: base.shadowElevation,
+        shadow: base.shadow,
+        whitenStrength: base.whitenStrength,
+        whitenGated: base.whitenGated,
+        edgeAbsorption: edgeAbsorption ?? base.edgeAbsorption,
+        backerColor: base.backerColor,
+        platformViewFallbackColor: base.platformViewFallbackColor,
+      );
+    }
+    // 中文说明：Impeller（Poiesis）从 base.copyWith 合并，而不是重新调用完整
+    // 构造器。这样主题只覆盖自己声明的字段，pinch、PlatformView 模式及后续
+    // 新增字段都不会因为构造器默认值而被静默重置，符合 partial override 的契约。
     return base.copyWith(
       visibility: visibility,
       glassColor: glassColor,

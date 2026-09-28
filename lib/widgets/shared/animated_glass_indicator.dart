@@ -5,6 +5,7 @@ import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/cupertino.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 
 import '../../constants/glass_defaults.dart';
 import '../../theme/glass_theme.dart';
@@ -406,8 +407,12 @@ class AnimatedGlassIndicator extends StatelessWidget {
 
     // 中文说明：交互进度仍控制形变与 pinch；材质可见度则允许调用方设置
     // 静止下限。这样底部导航能保留弱玻璃，而其他控件默认值为 0 时行为不变。
+    // 静止玻璃是 Poiesis 的 Impeller 补丁：Skia/Web 强制下限为 0，
+    // fade 退化为上游 1.7.2 的 `thickness.clamp(0, 1)`。
+    final patchesEnabled = PoiesisForkPolicy.patchesEnabled;
     final interactionFade = thickness.clamp(0.0, 1.0);
-    final restingFade = restingGlassVisibility.clamp(0.0, 1.0);
+    final restingFade =
+        patchesEnabled ? restingGlassVisibility.clamp(0.0, 1.0) : 0.0;
     final fade = restingFade + ((1.0 - restingFade) * interactionFade);
     final base =
         settings != null ? _mergeWithBase(settings!) : baseIndicatorSettings;
@@ -433,7 +438,9 @@ class AnimatedGlassIndicator extends StatelessWidget {
       shape: shape,
       settings: effectiveSettings,
       quality: quality,
-      interactionIntensity: fade,
+      // 中文说明：上游直接传入未 clamp 的 thickness（弹簧过冲时可略大于 1）；
+      // Poiesis 传入含静止下限的 fade。Skia/Web 保持上游原值。
+      interactionIntensity: patchesEnabled ? fade : thickness,
       backgroundKey: backgroundKey,
       clipExpansion:
           isVertical ? _jellyClipExpansionVertical : _jellyClipExpansion,

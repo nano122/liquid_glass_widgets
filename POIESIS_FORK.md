@@ -14,6 +14,39 @@
 合入官方 `1.7.2`，每次都语义迁移 Poiesis 补丁；没有压平历史或强制覆盖分支。Poiesis 主项目通过 Git
 submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版本化。
 
+## 渲染器分流：Skia/Web 使用上游原版（2026-09-28）
+
+下面列出的 Poiesis 补丁全部针对 Impeller 调校。Skia/Web 上叠加这些补丁，
+一来没有对应的原生合成链，二来会偏离上游已验证过的视觉基线。因此由
+`lib/src/renderer/poiesis_fork_policy.dart` 统一分流：
+
+- `PoiesisForkPolicy.patchesEnabled` 取值等于 `ui.ImageFilter.isShaderFilterSupported`。
+  - Impeller 上为 `true`，保留全部 Poiesis 补丁。
+  - Skia 和 Web 上为 `false`，受影响的分支逐一回到官方 1.7.2 的实现。
+  - 初始化时打印一次 `[LiquidGlass] Renderer=...` 日志，标明当前分流。
+- 轻量 Shader 改从 `shaders/upstream/` 加载。
+  - 该目录下的 `lightweight_glass.frag`、`interactive_indicator.frag` 和
+    `gles_compat.glsl` 由 `git show 4d3f4dfe:shaders/<name>` 逐字节提取，
+    禁止手工修改。
+  - uniform 写入布局跟随实际加载的程序：上游轻量玻璃在 slot 34 写
+    `uBodyMode`；上游指示器写到 slot 33 为止。
+- Skia/Web 恢复的上游行为：
+  - `shadowElevation` 默认值回到 1.0，外投影重新生效。
+  - Badge、状态点和 Toast 恢复彩色 BoxShadow。
+  - GlassButton 不再绘制反向镂空外投影，跳过边界条件回到上游写法。
+  - 底栏恢复圆角矩形，底板重新包 `RepaintBoundary`。
+  - 静止指示器不再常驻玻璃；指示器交互强度回到 `thickness`。
+  - FrostedFallback 恢复嵌套 `BackdropFilter` + 饱和度矩阵。
+  - `AdaptiveLiquidGlassLayer` 回到上游的直通条件：仅 minimal 或
+    PlatformView 直通，其余包 `LiquidGlassLayer`。
+  - 轻量玻璃和指示器每帧新建 `BackdropFilterLayer`，模糊滤镜缓存回到上游。
+  - `GlassThemeSettings.applyTo` 回到上游完整构造器写法。这会重置
+    `bodyMode` 等未列出的字段，属于上游原有行为，这里有意保留。
+- 测试：`flutter test` 没有 GPU 渲染器，因此 `test/flutter_test_config.dart`
+  默认把 `debugPatchesEnabledOverride` 设为 `true`，让既有补丁回归测试照常运行。
+  `test/poiesis_fork_policy_test.dart` 会显式切到上游模式，并校验
+  `shaders/upstream/` 与官方提交逐字节一致。
+
 ## Poiesis 补丁
 
 1. Standard 与 Premium 在 Impeller 上共用官方完整的
@@ -232,7 +265,8 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
   多形状 metaball 与其他复杂轮廓继续使用官方 geometry texture。
 - 透视、退化或不可逆变换不会强行进入解析式或二维逆仿射分支，自动回退官方
   纹理几何兼容映射。
-- Skia、Web 和 PlatformView 的既有自适应策略保持不变。
+- Skia 和 Web 不启用下列 Poiesis 补丁，按上文“渲染器分流”回到官方 1.7.2；
+  PlatformView 的既有自适应策略保持不变。
 
 ## 更新上游
 

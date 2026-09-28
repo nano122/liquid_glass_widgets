@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import '../../src/renderer/liquid_glass_renderer.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 
 import '../../theme/glass_theme_data.dart';
 import '../../theme/glass_theme.dart';
@@ -297,7 +298,17 @@ class _GlassToastState extends State<GlassToast> {
             width: 1,
           ),
           // 中文说明：Toast 本体已由 AdaptiveLiquidGlassLayer 提供材质，
-          // 当前玻璃策略不再额外向外投射彩色阴影；状态色仍由图标和描边表达。
+          // Impeller（Poiesis）策略不再额外向外投射彩色阴影，状态色仍由图标
+          // 和描边表达；Skia/Web 恢复上游 1.7.2 的彩色外投影。
+          boxShadow: PoiesisForkPolicy.patchesEnabled
+              ? null
+              : [
+                  BoxShadow(
+                    color: semanticColor.withValues(alpha: 0.15),
+                    blurRadius: 20,
+                    spreadRadius: 2,
+                  ),
+                ],
         ),
         padding: EdgeInsets.symmetric(
           horizontal: 16,

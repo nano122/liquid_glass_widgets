@@ -11,6 +11,7 @@ import 'package:flutter/foundation.dart'
 
 import '../../types/glass_quality.dart';
 import '../../src/renderer/glass_backdrop_kernel.dart';
+import '../../src/renderer/poiesis_fork_policy.dart';
 import '../../utils/glass_performance_monitor.dart';
 import 'glass_accessibility_scope.dart';
 import 'glass_isolation_scope.dart';
@@ -935,6 +936,31 @@ class _FrostedFallback extends StatelessWidget {
   /// negligible next to having no blur).
   final bool platformViewBackdrop;
 
+  /// Rec. 709 saturation matrix — identical to upstream FakeGlass.
+  ///
+  /// saturation = 0  → grayscale
+  /// saturation = 1  → unchanged
+  /// saturation > 1  → over-saturated (default glass is 1.5)
+  ///
+  /// Uses ITU-R BT.709 luma weights (corrected from BT.601 in v1.4.2).
+  ///
+  /// 中文说明：上游 1.7.2 原样保留，仅供 Skia/Web 的原版分支使用；
+  /// Impeller 走缓存化的 [GlassBackdropKernel.saturationFilter]。
+  static List<double> _saturationMatrix(double saturation) {
+    // ITU-R BT.709 / IEC 61966-2-1 (sRGB) luminance coefficients.
+    const lumR = 0.2126;
+    const lumG = 0.7152;
+    const lumB = 0.0722;
+    final s = saturation;
+    final inv = 1.0 - s;
+    return [
+      lumR * inv + s, lumG * inv, lumB * inv, 0, 0, // R
+      lumR * inv, lumG * inv + s, lumB * inv, 0, 0, // G
+      lumR * inv, lumG * inv, lumB * inv + s, 0, 0, // B
+      0, 0, 0, 1, 0, // A
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final blur = settings.effectiveBlur.clamp(0.0, 40.0);
@@ -997,7 +1023,22 @@ class _FrostedFallback extends StatelessWidget {
             blur > 0;
 
     Widget body;
-    if (useBlur) {
+    if (useBlur && !PoiesisForkPolicy.patchesEnabled) {
+      // 中文说明：Skia/Web 严格回到上游 1.7.2：外层高斯模糊 + tint，
+      // 需要饱和度时再嵌套第二个 BackdropFilter 做颜色矩阵。
+      body = BackdropFilter(
+        filter: ui.ImageFilter.blur(sigmaX: blur, sigmaY: blur),
+        child: DecoratedBox(
+          decoration: BoxDecoration(color: frostedColor),
+          child: needsSaturation
+              ? BackdropFilter(
+                  filter: ui.ColorFilter.matrix(_saturationMatrix(sat)),
+                  child: const SizedBox.expand(),
+                )
+              : const SizedBox.expand(),
+        ),
+      );
+    } else if (useBlur) {
       final blurredBody = BackdropFilter(
         filter: GlassBackdropKernel.exact(sigma: blur),
         child: DecoratedBox(

@@ -13,6 +13,7 @@ import 'package:flutter/foundation.dart';
 import '../../../widgets/shared/glass_focus_region.dart';
 import '../../../constants/glass_defaults.dart';
 import '../../renderer/liquid_glass_renderer.dart';
+import '../../renderer/poiesis_fork_policy.dart';
 import '../../../theme/glass_theme.dart';
 import '../../../types/glass_quality.dart';
 import '../../../utils/draggable_indicator_physics.dart';
@@ -588,8 +589,36 @@ class TabIndicatorState extends State<TabIndicator>
   final GlobalKey _iconLayerKey = GlobalKey();
 
   // Cached shape to avoid recreation on every animation frame
-  late LiquidRoundedSuperellipse _barShape =
-      LiquidRoundedSuperellipse(borderRadius: widget.barBorderRadius);
+  late LiquidShape _barShape = _buildBarShape(widget.barBorderRadius);
+
+  /// 按渲染器选择底栏外壳形状。
+  ///
+  /// 中文说明：超椭圆底栏是 Poiesis 针对 Impeller 原生玻璃层的视觉补丁；
+  /// Skia/Web 回到上游 1.7.2 的 [LiquidRoundedRectangle]，与轻量 Shader
+  /// 的圆角矩形 SDF 保持一致。
+  static LiquidShape _buildBarShape(double borderRadius) =>
+      PoiesisForkPolicy.patchesEnabled
+          ? LiquidRoundedSuperellipse(borderRadius: borderRadius)
+          : LiquidRoundedRectangle(borderRadius: borderRadius);
+
+  /// 构建底栏玻璃底板。
+  ///
+  /// 中文说明：Impeller（Poiesis）下底板直接作为共享玻璃层的几何节点参与
+  /// 合成——当前配方 blur 为 0，额外 RepaintBoundary 不提供模糊缓存收益，
+  /// 直接注册可减少一层无必要的合成隔离。Skia/Web 回到上游 1.7.2：用
+  /// RepaintBoundary 缓存底板，避免拖动胶囊时重复栅格化模糊。
+  /// 两种模式都采用上游 1.6 新增的 backgroundQuality，允许底板与指示器
+  /// 分别指定质量。
+  Widget _buildBarBackground() {
+    final background = AdaptiveGlass.grouped(
+      quality: widget.backgroundQuality ?? widget.quality,
+      platformViewBackdrop: widget.platformViewBackdrop,
+      shape: _barShape,
+      child: const SizedBox.expand(),
+    );
+    if (PoiesisForkPolicy.patchesEnabled) return background;
+    return RepaintBoundary(child: background);
+  }
 
   @override
   void didUpdateWidget(covariant TabIndicator oldWidget) {
@@ -598,8 +627,7 @@ class TabIndicatorState extends State<TabIndicator>
 
     // Update cached shape if border radius changes
     if (oldWidget.barBorderRadius != widget.barBorderRadius) {
-      _barShape =
-          LiquidRoundedSuperellipse(borderRadius: widget.barBorderRadius);
+      _barShape = _buildBarShape(widget.barBorderRadius);
     }
   }
 
@@ -835,19 +863,8 @@ class TabIndicatorState extends State<TabIndicator>
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // 中文说明：底板直接作为共享玻璃层的几何节点参与合成。
-                  // 当前配方 blur 为 0，额外 RepaintBoundary 不提供模糊缓存收益；
-                  // 直接注册可减少一层无必要的合成隔离，并保持底板层级更清晰。
-                  Positioned.fill(
-                    // 中文说明：保留 Poiesis 去掉 RepaintBoundary 的层级，同时采用
-                    // 上游 1.6 新增的 backgroundQuality，允许底板与指示器分别指定质量。
-                    child: AdaptiveGlass.grouped(
-                      quality: widget.backgroundQuality ?? widget.quality,
-                      platformViewBackdrop: widget.platformViewBackdrop,
-                      shape: _barShape,
-                      child: const SizedBox.expand(),
-                    ),
-                  ),
+                  // Glass background（Poiesis/上游分流见 _buildBarBackground）
+                  Positioned.fill(child: _buildBarBackground()),
 
                   // Unselected icons — always visible, all tabs in unselected style.
                   // The glass indicator refracts this layer as the pill moves over it.
@@ -863,7 +880,10 @@ class TabIndicatorState extends State<TabIndicator>
           ),
 
           // Glass indicator — on top so it refracts the icon layer AND the glow beneath.
-          if (widget.visible)
+          // 中文说明：Poiesis 为支持 iOS 静止玻璃，在 thickness≈0 时也保留
+          // 指示器；Skia/Web 回到上游 1.7.2，静止（thickness ≤ 0.05）时不构建。
+          if (widget.visible &&
+              (PoiesisForkPolicy.patchesEnabled || thickness > 0.05))
             AnimatedGlassIndicator(
               velocity: velocity,
               itemCount: widget.tabCount,
@@ -929,18 +949,8 @@ class TabIndicatorState extends State<TabIndicator>
               child: Stack(
                 clipBehavior: Clip.none,
                 children: [
-                  // 中文说明：Premium 底板同样直接留在共享玻璃层中。这里不再
-                  // 插入无缓存收益的 RepaintBoundary，避免额外的合成层级。
-                  Positioned.fill(
-                    // 中文说明：保留 Poiesis 去掉 RepaintBoundary 的层级，同时采用
-                    // 上游 1.6 新增的 backgroundQuality，允许底板与指示器分别指定质量。
-                    child: AdaptiveGlass.grouped(
-                      quality: widget.backgroundQuality ?? widget.quality,
-                      platformViewBackdrop: widget.platformViewBackdrop,
-                      shape: _barShape,
-                      child: const SizedBox.expand(),
-                    ),
-                  ),
+                  // 1. Glass Background（Poiesis/上游分流见 _buildBarBackground）
+                  Positioned.fill(child: _buildBarBackground()),
 
                   // 1.5. Solid Indicator Background (drawn below icons so selected icons are vibrant)
                   AnimatedGlassIndicator(

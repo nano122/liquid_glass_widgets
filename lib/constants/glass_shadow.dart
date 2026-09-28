@@ -1,5 +1,7 @@
 import 'package:flutter/widgets.dart';
 
+import '../src/renderer/poiesis_fork_policy.dart';
+
 /// Default light-mode glass shadow values, matching iOS 26 elevation.
 ///
 /// Used by [AdaptiveGlass] and the internal tab indicator and search pill
@@ -22,11 +24,14 @@ import 'package:flutter/widgets.dart';
 /// GlassShadow.scaled(0.0) // empty list
 /// ```
 abstract final class GlassShadow {
-  /// 中文说明：Poiesis 当前的玻璃视觉策略关闭所有向外投射的玻璃阴影，
+  /// 中文说明：Poiesis 在 Impeller 上关闭所有向外投射的玻璃阴影，
   /// 只保留 Shader 内部的折射、边缘层和交互光晕。保留这项集中策略，
   /// 让 LiquidGlassSettings、底栏阴影覆盖层和 Premium SDF 路径共享同一开关，
   /// 避免某个入口继续单独创建离屏阴影。
-  static const bool dropShadowsEnabled = false;
+  ///
+  /// Skia/Web 由 [PoiesisForkPolicy] 切回上游 1.7.2 行为：外投影恢复启用，
+  /// 与原版 `GlassShadow.scaled` / `effectiveShadow` 完全一致。
+  static bool get dropShadowsEnabled => !PoiesisForkPolicy.patchesEnabled;
 
   /// The default elevation shadow (≈6% black, 8px blur, 2px y-offset).
   static const BoxShadow elevation = BoxShadow(
@@ -55,8 +60,9 @@ abstract final class GlassShadow {
   ///
   /// Opacity is clamped to `0.0–1.0`; blur and offset scale linearly.
   static List<BoxShadow> scaled(double elevation) {
-    // 中文说明：关闭策略时直接返回空常量列表，不创建阴影对象或额外绘制层；
-    // 保留 elevation 参数和 API 结构，方便未来按产品视觉策略恢复而无需改调用方。
+    // 中文说明：Impeller（Poiesis 策略）关闭外投影时直接返回空常量列表，
+    // 不创建阴影对象或额外绘制层；Skia/Web 下 dropShadowsEnabled 为 true，
+    // 这一行退化为上游原版的 `elevation <= 0` 判断。
     if (!dropShadowsEnabled || elevation <= 0) return const [];
     if (elevation == 1.0) return defaults;
     return [
