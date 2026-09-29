@@ -147,11 +147,12 @@ submodule 固定具体提交，补丁、Shader 和测试都在 fork 中独立版
    - 原生 iOS 由宿主读取当前窗口 `UIScreen.currentEDRHeadroom`，组件库默认
      `1.0`，只在实时值超过 SDR 白点时启用并封顶为 `1.22`；Web、非 iOS、
      普通 SDR 屏幕与桥接缺失场景都写 `1.0`。SDR 的宽高光基底恢复为 HDR
-     改造前的胶囊 2dp/3dp 平台与圆形 12%/10% 月牙平台；EDR 另用独立的
-     0.75dp/0.50dp 窄遮罩，调整 HDR 核心不再改变 SDR 可见性。EDR 能量仍
-     拆成四层：主体使用 12% 可用 headroom，镜面、Fresnel 与顶部肩部使用
-     36%，仅顶部不足约 1dp 的核心使用完整实时白点；底部 EDR 峰值使用 50%
-     headroom。层间使用五次 smootherstep，预乘 alpha、结构边、折射不变；Premium
+     改造前的胶囊 2dp/3dp 平台与圆形 12%/10% 月牙平台；EDR 另用独立几何，
+     调整 HDR 不再改变 SDR 可见性。EDR 能量为“基底 + 边缘”：整块玻璃使用
+     15% headroom 基底（约 1.033），上下边缘按逻辑距离做 τ=1.5dp 的单条
+     指数衰减，顶部边缘到完整实时白点、底部边缘再乘 50%（约 1.127），
+     取代旧的“宽肩部 + 极窄核心”两级台阶；镜面与 Fresnel 入口仍限制在
+     36%。预乘 alpha、结构边、折射不变；Premium
      实时与 capture 使用 slot 49，Standard 使用 slot 37，交互指示器使用
      slot 38，复用的 FragmentShader 不会继承上一 surface 的状态；
    - 解析式路径只在轮廓窄带增加八次 cache-free SDF ALU；Premium 多形状仅在

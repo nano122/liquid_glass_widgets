@@ -311,32 +311,40 @@ const float kBottomAreaHighlightMaxLogicalHeight = 20.0;
 const float kTopAreaHighlightPlateauMaxLogicalHeight = 2.0;
 const float kBottomAreaHighlightPlateauMaxLogicalHeight = 3.0;
 
-// 中文说明：EDR 峰值拥有独立几何，绝不能再通过缩窄上面的共用常量来实现；
+// 中文说明：EDR 边缘能量按“距边缘的逻辑距离（dp）”做单条指数衰减
+// exp(-d / τ)，τ 即下面两个衰减常量。旧实现把能量拆成“宽肩部 + 极窄核心”
+// 两段 smootherstep 相加：1dp 内从 1.22 骤降到约 1.08（3x 屏只有两三个
+// 像素，像一条硬亮线），随后在 2～4dp 维持约 1.08 的平台，直到约 7dp 才回到
+// 白点，视觉上形成“亮线 + 亮板”两级台阶，导致亮区面积过大。指数曲线从
+// 边缘开始单调、连续且越来越缓地减淡，没有峭壁也没有平台；以 dp 计量还
+// 让亮带宽度与控件高度解耦，大卡片与小按钮的衰减速度一致。
+// EDR 几何只在 headroom > 1.0 时计算，绝不能通过修改上面的 SDR 常量实现，
 // 否则 headroom=1.0 的普通 SDR 屏幕也会一起丢失可见高光。
-const float kTopAreaHighlightEdrPlateau = 0.012;
-const float kBottomAreaHighlightEdrPlateau = 0.008;
-const float kTopAreaHighlightEdrPlateauMaxLogicalHeight = 0.75;
-const float kBottomAreaHighlightEdrPlateauMaxLogicalHeight = 0.50;
+const float kTopEdrDecayLogical = 1.5;
+const float kBottomEdrDecayLogical = 1.5;
 
 // 中文说明：圆形月牙贴合高光几何参数
 const float kCrescentTopExtent = 0.45;
 const float kCrescentTopPlateau = 0.12;
 const float kCrescentBottomExtent = 0.40;
 const float kCrescentBottomPlateau = 0.10;
-const float kCrescentTopEdrPlateau = 0.03;
-const float kCrescentBottomEdrPlateau = 0.02;
 
-// 中文说明：EDR 的 0.22 额外亮度拆成主体、肩部和核心三层。主体仅使用
-// 12% 的可用 headroom（1.22 时约为 1.0264），建立整块玻璃的通透感；
-// 顶部肩部使用 36%（约 1.079），最后 64% 只交给极窄核心。底部肩部更弱，
-// 且核心总量封顶在 50%（约 1.11），因此任何时候都不会抢过顶部主高光。
-const float kGlassBodyEdrShare = 0.12;
-const float kTopHighlightShoulderEdrShare = 0.36;
-const float kBottomHighlightShoulderEdrShare = 0.22;
+// 中文说明：EDR 的额外亮度（1.22 时 hdrRange=0.22）按“基底 + 边缘”分配：
+// 1. 基底 15%：整块玻璃都可达到 1 + 0.22×0.15 ≈ 1.033，保证玻璃整体偏亮。
+//    旧实现的 12% 主体提亮在远离边缘处会被 1.0 白点截掉，实际并不可见；
+//    现在白点下限随基底一起抬高，基底真正生效。
+// 2. 边缘 85%：乘以上面的指数衰减能量，顶部边缘恰好叠加到完整 1.22；
+//    底部边缘能量再乘 50%，峰值约 1 + 0.22×(0.15+0.85×0.5) ≈ 1.127，
+//    任何时候都不会抢过顶部主高光。
+// 以 1.5dp 衰减为例，白背景顶部亮度约为：0dp 1.22、1dp 1.13、2dp 1.08、
+// 3dp 1.06、5dp 1.04，此后收敛到 1.033 基底。
+const float kGlassBodyEdrShare = 0.15;
 const float kBottomHighlightPeakEdrShare = 0.50;
+// 中文说明：方向镜面与 Fresnel 属于大面积高光，最多只使用 36% headroom
+// （约 1.079）作为入口截断；最终仍会被区域高光的逐像素 EDR 白点再次收束，
+// 因此远离边缘处不会超过基底亮度。
+const float kSpecularFresnelEdrShare = 0.36;
 const float kCrescentBottomHighlightSdrStrength = 0.70;
-const float kTopHighlightCoreStart = 0.96;
-const float kBottomHighlightCoreStart = 0.98;
 
 const float kAreaHighlightMiddleBackdropGate = 0.25;
 const float kAreaHighlightDarkPeakGate = 0.50;
@@ -346,18 +354,11 @@ const float kAreaHighlightLightRiseStartLuma = 0.90;
 const float kAreaHighlightLightFullLuma = 1.00;
 const vec3 kAreaHighlightLumaWeights = vec3(0.2126, 0.7152, 0.0722);
 
-float smootherstep01(float value) {
-    // 中文说明：五次平滑曲线在 0 与 1 两端的一阶、二阶导数都为零，
-    // 相比普通 smoothstep 更适合把 HDR 肩部送入狭窄核心，避免亮度折线和色带。
-    float x = clamp(value, 0.0, 1.0);
-    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0);
-}
-
 float getGlassHighlightShoulderWhitePoint(float highlightHeadroomMultiplier) {
-    // 中文说明：方向镜面与 Fresnel 都属于大面积高光，只允许使用肩部白点；
-    // 完整 1.22 峰值保留给下方区域高光的极窄顶部核心。
+    // 中文说明：方向镜面与 Fresnel 都属于大面积高光，只允许使用 36% 的
+    // 入口白点；完整 1.22 峰值只留给区域高光在边缘处的指数衰减起点。
     float hdrRange = max(highlightHeadroomMultiplier - 1.0, 0.0);
-    return 1.0 + hdrRange * kTopHighlightShoulderEdrShare;
+    return 1.0 + hdrRange * kSpecularFresnelEdrShare;
 }
 
 vec4 getAdaptiveAreaHighlightExposureProfiles(
@@ -396,10 +397,9 @@ vec4 getAdaptiveAreaHighlightExposureProfiles(
         kBottomAreaHighlightPlateau,
         kBottomAreaHighlightPlateauMaxLogicalHeight / safeSize.y
     );
-    // 中文说明：EDR 窄遮罩只在 headroom 超过 SDR 白点时才会被消费；
+    // 中文说明：EDR 边缘能量只在 headroom 超过 SDR 白点时才会被消费；
     // 安卓、Windows、Web 与 SDR iOS 恒为 1.0，此时 zw 保持 0 并跳过下方
-    // 两处 smoothstep 与两次 pow。uniform 驱动的分支对整个 draw 一致，
-    // 不产生 warp 发散。
+    // 四次 exp。uniform 驱动的分支对整个 draw 一致，不产生 warp 发散。
     bool edrEnabled = highlightHeadroomMultiplier > 1.0;
     float capsuleTopEdr = 0.0;
     float capsuleBottomEdr = 0.0;
@@ -446,47 +446,32 @@ vec4 getAdaptiveAreaHighlightExposureProfiles(
         * kCrescentBottomHighlightSdrStrength;
 
     if (edrEnabled) {
-        float effectiveTopEdrPlateau = min(
-            kTopAreaHighlightEdrPlateau,
-            kTopAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
+        // 中文说明：胶囊按局部 UV 换算为距顶边 / 底边的逻辑距离（dp），
+        // 再做指数衰减；边缘处能量恰为 1.0，距离每增加 τ 衰减到约 37%。
+        float capsuleTopDistance = clampedUV.y * safeSize.y;
+        float capsuleBottomDistance = (1.0 - clampedUV.y) * safeSize.y;
+        capsuleTopEdr = exp(-capsuleTopDistance / kTopEdrDecayLogical);
+        capsuleBottomEdr = exp(
+            -capsuleBottomDistance / kBottomEdrDecayLogical
         );
-        float effectiveBottomEdrPlateau = min(
-            kBottomAreaHighlightEdrPlateau,
-            kBottomAreaHighlightEdrPlateauMaxLogicalHeight / safeSize.y
-        );
-        capsuleTopEdr = 1.0 - smoothstep(
-            effectiveTopEdrPlateau,
-            effectiveTopExtent,
-            clampedUV.y
-        );
-        capsuleBottomEdr = smoothstep(
-            1.0 - effectiveBottomExtent,
-            1.0 - effectiveBottomEdrPlateau,
-            clampedUV.y
-        );
-        float topCrescentEdrProfile = 1.0 - smoothstep(
-            kCrescentTopEdrPlateau,
-            kCrescentTopExtent,
-            inwardDepthTop
-        );
-        topCrescentEdr = pow(
-            max(topCrescentEdrProfile, 0.0),
-            0.85
-        ) * arcSpanTop;
-        float bottomCrescentEdrProfile = smoothstep(
-            kCrescentBottomExtent,
-            kCrescentBottomEdrPlateau,
-            inwardDepthBottom
-        );
-        bottomCrescentEdr = pow(
-            max(bottomCrescentEdrProfile, 0.0),
-            0.90
+
+        // 中文说明：月牙深度位于归一化圆盘 [-1, 1] 坐标，乘半高换算为 dp，
+        // 使圆形与胶囊使用同一 τ、同样的物理衰减速度，形态插值时无突变。
+        // arcSpan 继续负责月牙两端沿圆弧收窄，赤道附近不会出现 EDR 亮斑。
+        float crescentRadius = safeSize.y * 0.5;
+        float topCrescentDistance = max(inwardDepthTop, 0.0) * crescentRadius;
+        float bottomCrescentDistance = max(inwardDepthBottom, 0.0)
+            * crescentRadius;
+        topCrescentEdr = exp(-topCrescentDistance / kTopEdrDecayLogical)
+            * arcSpanTop;
+        bottomCrescentEdr = exp(
+            -bottomCrescentDistance / kBottomEdrDecayLogical
         ) * arcSpanBottom;
     }
 
     // 中文说明：xy 是恢复到 HDR 改造前宽度与强度的 SDR 顶/底基底；zw 是
-    // 独立窄 EDR 顶/底遮罩。两组都按圆形度连续插值，jelly 变形无跳变，
-    // 同时保证今后调 EDR 核心不会再影响 SDR 可见性。
+    // 独立的 EDR 顶/底指数衰减边缘能量。两组都按圆形度连续插值，jelly
+    // 变形无跳变，同时保证今后调 EDR 衰减不会再影响 SDR 可见性。
     return clamp(
         mix(
             vec4(
@@ -575,9 +560,10 @@ vec3 applyVerticalAreaHighlight(
     float colorAlpha,
     float highlightHeadroomMultiplier
 ) {
-    // 中文说明：先将此前的方向镜面与 Fresnel 收束到约 1.08 的肩部白点，
-    // 再给整块玻璃施加轻微乘法曝光。乘法方式保持背景色相与纹理，且 EDR
-    // 未启用时 hdrRange 为零，所有非 iOS 平台仍严格走原 SDR 数值。
+    // 中文说明：先将此前的方向镜面与 Fresnel 收束到约 1.08 的入口白点，
+    // 再给整块玻璃施加 15% headroom 的乘法基底曝光。乘法方式保持背景色相
+    // 与纹理，且 EDR 未启用时 hdrRange 为零，所有非 iOS 平台仍严格走原 SDR
+    // 数值。
     float safeColorAlpha = clamp(colorAlpha, 0.0, 1.0);
     float hdrRange = max(highlightHeadroomMultiplier - 1.0, 0.0);
     float shoulderWhitePointMultiplier = getGlassHighlightShoulderWhitePoint(
@@ -623,38 +609,32 @@ vec3 applyVerticalAreaHighlight(
         * sdrExposure;
 
     // 中文说明：hdrRange 为 0 时 edrWhitePoint 恰为 safeColorAlpha、edrLift
-    // 恰为 0，下式与完整公式逐值相等；以 uniform 门控跳过四次
-    // smootherstep 与能量分配，安卓等 SDR surface 不再为不可见的 EDR 付费。
+    // 恰为 0，下式与完整公式逐值相等；以 uniform 门控跳过能量分配，
+    // 安卓等 SDR surface 不再为不可见的 EDR 付费。
     vec3 result = min(withSdrHighlight, vec3(safeColorAlpha));
     if (hdrRange > 0.0) {
-        // 中文说明：五次 smootherstep 生成无折点肩部；只有遮罩最后 4% 的顶部、
-        // 最后 2% 的底部进入核心。顶部核心可用完整 1.22，底部核心最多 1.11。
-        // 最终仍乘背景权重与亮度门控，避免暗背景凭空出现一块白光。
-        float topShoulder = smootherstep01(safeEdrExposureProfile.x);
-        float bottomShoulder = smootherstep01(safeEdrExposureProfile.y);
-        float topCore = smootherstep01(
-            (safeEdrExposureProfile.x - kTopHighlightCoreStart)
-                / (1.0 - kTopHighlightCoreStart)
-        );
-        float bottomCore = smootherstep01(
-            (safeEdrExposureProfile.y - kBottomHighlightCoreStart)
-                / (1.0 - kBottomHighlightCoreStart)
-        );
-        float topEdrEnergy = topShoulder * kTopHighlightShoulderEdrShare
-            + topCore * (1.0 - kTopHighlightShoulderEdrShare);
-        float bottomEdrEnergy = bottomShoulder * kBottomHighlightShoulderEdrShare
-            + bottomCore * (
-                kBottomHighlightPeakEdrShare
-                    - kBottomHighlightShoulderEdrShare
-            );
-        float edrEnergy = clamp(max(topEdrEnergy, bottomEdrEnergy), 0.0, 1.0);
+        // 中文说明：zw 已是指数衰减后的顶 / 底边缘能量（边缘为 1，向内连续
+        // 减弱）。底部整体只取 50%，再与顶部取最大值，矮控件上下能量重叠时
+        // 不会相加出超过顶部峰值的亮度。
+        float topEdgeEnergy = safeEdrExposureProfile.x;
+        float bottomEdgeEnergy = safeEdrExposureProfile.y
+            * kBottomHighlightPeakEdrShare;
+        float edgeEnergy = max(topEdgeEnergy, bottomEdgeEnergy);
+        // 中文说明：边缘只分配基底之外剩余的 85%，因此总能量从边缘 1.0
+        // 单调收敛到基底 0.15，而不是收敛到 0；远离边缘的玻璃仍保持偏亮。
+        float edgeEdrEnergy = (1.0 - kGlassBodyEdrShare) * edgeEnergy;
+        float edrEnergy = kGlassBodyEdrShare + edgeEdrEnergy;
+        // 中文说明：逐像素 EDR 白点下限就是基底白点（1.22 时约 1.033），
+        // 让上面 bodyLiftedColor 的乘法基底真正可见；旧实现在边缘能量为 0
+        // 处把白点压回 1.0，主体提亮被整段截掉。
         vec3 edrWhitePoint = vec3(
             safeColorAlpha * (1.0 + hdrRange * edrEnergy)
         );
-        // 中文说明：EDR 层只能增加“超过 1.0”的 hdrRange。旧实现从目标白点
-        // 减去当前 SDR 颜色，导致 hdrRange=0 时窄核心仍二次消费 SDR headroom；
-        // 这里直接按额外范围分配，确保 1.0 路径与 HDR 改造前逐值一致。
-        vec3 edrLift = vec3(safeColorAlpha * hdrRange * edrEnergy)
+        // 中文说明：基底份额已由 bodyLiftedColor 以乘法方式提供（保留色相），
+        // 这里只叠加边缘份额，避免基底被计算两次。EDR 层只能增加“超过 1.0”
+        // 的 hdrRange，显式乘 hdrRange 确保 1.0 路径与 HDR 改造前逐值一致；
+        // 最终仍乘背景权重与亮度门控，避免暗背景凭空出现一块白光。
+        vec3 edrLift = vec3(safeColorAlpha * hdrRange * edgeEdrEnergy)
             * backdropWeight
             * backdropExposureGate;
         result = min(withSdrHighlight + edrLift, edrWhitePoint);

@@ -9,7 +9,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: 03bfb6b9
+  // POIESIS_EDGE_TREATMENT_ADLER32: 6ed00533
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -87,7 +87,7 @@ uniform float uRefractionEnabled;
 // 材质 alpha、光照、Fresnel 和双层边仍覆盖整个组件。
 uniform float uTopRefractionOnly;
 
-// 38: 中文说明：用于分配主体柔光、方向光肩部和上下区域峰值。
+// 38: 中文说明：用于分配整块玻璃的 EDR 基底与上下边缘指数衰减高光。
 // 背景折射、透明度与灰黑结构边不读取该值。
 uniform float uHighlightHeadroom;
 
@@ -551,8 +551,8 @@ void main() {
   float absorption = 1.0 - lensThickness * modulatedAbsorption;
   finalColor *= max(0.0, absorption);
 
-  // 中文说明：共享函数以当前折射背景 bg 分配主体柔光、顶部肩部和极窄核心；
-  // 底部基础反射与峰值均更弱。无纹理模式自然使用既有底色，过渡保持连续。
+  // 中文说明：共享函数以当前折射背景 bg 分配整块玻璃的 EDR 基底，以及从
+  // 上下边缘按 dp 指数衰减的高光；底部峰值更弱。无纹理模式自然使用既有底色，过渡保持连续。
   finalColor = applyVerticalAreaHighlight(
     finalColor,
     bg,
@@ -571,7 +571,7 @@ void main() {
   );
 
   // 中文说明：平台 uniform 是当前屏幕对应的最终安全上限（最高 1.22）；真正
-  // 达到该上限的只有顶部极窄核心，其他高光已在共享函数中收束到肩部范围。
+  // 达到该上限的只有顶部边缘，向内按指数衰减收敛到基底白点。
   finalColor = clamp(finalColor, vec3(0.0), vec3(uHighlightHeadroom));
   
   // ==========================================================================

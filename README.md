@@ -351,11 +351,13 @@ requirement described below.
 ### iOS EDR highlights (Poiesis fork)
 
 The Poiesis fork keeps the original, broad SDR highlight as an independent base
-and applies EDR only as a narrower additive layer. At the maximum `1.22`
-headroom, the glass body receives a subtle `~2.64%` multiplicative lift, broad
-specular/Fresnel shoulders stop at about `1.08`, and only a sub-1dp top core can
-reach `1.22`. The bottom EDR peak stays near `1.11`. Quintic transitions keep
-these layers continuous. A `1.0` headroom now reproduces the pre-EDR highlight
+and applies EDR as a separate layer. At the maximum `1.22` headroom, the whole
+glass body receives a `15%` headroom floor (about `1.033`), and the top and
+bottom edges add a single exponential falloff measured in logical pixels
+(`exp(-d / 1.5dp)`): the top edge reaches `1.22` and the bottom edge about
+`1.127`, then both decay monotonically back to the floor with no plateau.
+Specular/Fresnel inputs are still capped at about `1.08` before the per-pixel
+EDR white point is applied. A `1.0` headroom now reproduces the pre-EDR highlight
 width instead of inheriting the narrow HDR core geometry. Refraction, alpha,
 and structural rims are unchanged; Web and every non-iOS platform remain SDR.
 

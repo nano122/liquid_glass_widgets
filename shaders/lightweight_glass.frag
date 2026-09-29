@@ -10,7 +10,7 @@
 // 中文说明：Flutter 的增量 Shader 构建不会把自定义 #include 记录为入口依赖。
 // 此校验值对应 edge_treatment.glsl 的规范化 UTF-8 内容；修改共享边缘算法后，
 // 必须同步更新三个入口。入口文件内容因此发生变化，旧编译产物才不会被继续复用。
-  // POIESIS_EDGE_TREATMENT_ADLER32: 03bfb6b9
+  // POIESIS_EDGE_TREATMENT_ADLER32: 6ed00533
 #include "edge_treatment.glsl"
 #include "gles_compat.glsl"
 
@@ -51,7 +51,7 @@ uniform float uRefractionEnabled;
 // 下方仍以原坐标读取背景，保留完整材质与光照合成。
 uniform float uTopRefractionOnly;
 // 37: uHighlightHeadroom — iOS 使用当前 EDR 值（最高 1.22），其他 surface 为 1.0。
-// 共享函数会分配主体柔光、宽肩部和极窄峰值；折射采样与结构边颜色不变。
+// 共享函数会分配整块玻璃基底与边缘指数衰减高光；折射采样与结构边颜色不变。
 uniform float uHighlightHeadroom;
 // 38: uBodyMode — 0.0 = adaptive (default, iOS 26 Glass.regular), 1.0 = clear (iOS 26 Glass.clear).
 // In clear mode, luminance normalization is bypassed for direct alpha compositing.
@@ -671,8 +671,8 @@ void main() {
       // [1] Hemisphere lens profile + [2] light-modulated absorption (PATH A normal)
       finalColor *= meniscusAbsorption(distFromEdge, edgeZone, surfaceNormal, uLightDirection, uEdgeAbsorption);
 
-      // 中文说明：有效背景路径复用已折射的 bgRgb；共享函数给主体少量柔光，
-      // 顶部以宽肩部衔接极窄峰值，底部基础与峰值都更弱，且不增加纹理读取。
+      // 中文说明：有效背景路径复用已折射的 bgRgb；共享函数给整块玻璃 EDR 基底，
+      // 顶部从边缘按 dp 指数衰减到基底，底部峰值更弱，且不增加纹理读取。
       finalColor = applyVerticalAreaHighlight(
         finalColor,
         bgRgb,

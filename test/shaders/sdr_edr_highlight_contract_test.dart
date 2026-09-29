@@ -7,9 +7,9 @@ void main() {
   final helperFile = File('shaders/edge_treatment.glsl');
   final helperSource = helperFile.readAsStringSync(encoding: utf8);
 
-  test('SDR 宽基底与 EDR 窄核心使用两组独立几何', () {
+  test('SDR 宽基底与 EDR 指数衰减使用两组独立几何', () {
     // 中文说明：这些值就是 HDR 改造前可见的 SDR 高光宽度。回归测试明确锁定
-    // 它们，并同时要求 EDR 使用独立命名常量，防止再次为缩窄 HDR 而误伤 SDR。
+    // 它们，并同时要求 EDR 使用独立命名常量，防止再次为调整 HDR 而误伤 SDR。
     expect(
       helperSource,
       contains('const float kTopAreaHighlightPlateau = 0.03;'),
@@ -40,11 +40,11 @@ void main() {
     );
     expect(
       helperSource,
-      contains('const float kTopAreaHighlightEdrPlateau = 0.012;'),
+      contains('const float kTopEdrDecayLogical = 1.5;'),
     );
     expect(
       helperSource,
-      contains('const float kBottomAreaHighlightEdrPlateau = 0.008;'),
+      contains('const float kBottomEdrDecayLogical = 1.5;'),
     );
     expect(
       helperSource,
@@ -59,7 +59,7 @@ void main() {
     // 即使 hdrRange 为零也会再提亮窄核心，导致 SDR 输出不再是独立基线。
     expect(
       helperSource,
-      contains('vec3(safeColorAlpha * hdrRange * edrEnergy)'),
+      contains('vec3(safeColorAlpha * hdrRange * edgeEdrEnergy)'),
     );
     expect(
       helperSource,
@@ -109,7 +109,7 @@ void main() {
 
   test('SDR surface（headroom ≤ 1.0）跳过 EDR 遮罩与能量分配', () {
     // 中文说明：安卓掉帧排查发现 EDR 分层在 headroom=1.0 时仍逐像素计算
-    // 两次 pow、六次 smoothstep/smootherstep，结果却恒乘 0。这里锁定
+    // 多次 pow/smoothstep，结果却恒乘 0（现为四次 exp）。这里锁定
     // uniform 门控，防止后续改动把不可见的 EDR 开销重新带回 SDR 平台。
     expect(
       helperSource,
@@ -125,7 +125,7 @@ void main() {
     );
     // 能量分配只能出现在门控之后。
     expect(
-      helperSource.indexOf('float topShoulder = smootherstep01('),
+      helperSource.indexOf('float edgeEnergy = max('),
       greaterThan(helperSource.indexOf('if (hdrRange > 0.0) {')),
     );
     for (final path in const <String>[
@@ -143,6 +143,51 @@ void main() {
         reason: '$path 必须把 headroom 传入遮罩函数，SDR 下才能跳过 EDR 遮罩',
       );
     }
+  });
+
+  test('EDR 边缘能量为单条指数衰减，不再是“肩部 + 窄核心”两级台阶', () {
+    // 中文说明：回归 iOS HDR 高光“亮的地方太多”：旧实现把宽肩部与极窄核心
+    // 两段 smootherstep 相加，1dp 内从 1.22 骤降到约 1.08 后在 2～4dp 形成
+    // 平台。这里锁定按 dp 距离的 exp 衰减，并禁止两段式常量与函数回归。
+    expect(
+      helperSource,
+      contains('exp(-capsuleTopDistance / kTopEdrDecayLogical)'),
+    );
+    expect(helperSource,
+        contains('float capsuleTopDistance = clampedUV.y * safeSize.y;'));
+    for (final removed in const <String>[
+      'smootherstep01',
+      'kTopHighlightShoulderEdrShare',
+      'kBottomHighlightShoulderEdrShare',
+      'kTopHighlightCoreStart',
+      'kBottomHighlightCoreStart',
+      'kTopAreaHighlightEdrPlateau',
+      'kCrescentTopEdrPlateau',
+    ]) {
+      expect(
+        helperSource,
+        isNot(contains(removed)),
+        reason: '$removed 属于已废弃的两级台阶 EDR 分配，不应再出现',
+      );
+    }
+  });
+
+  test('EDR 白点下限抬到基底，整块玻璃在 HDR 屏上保持偏亮', () {
+    // 中文说明：旧实现边缘能量为 0 处白点被压回 1.0，主体提亮整段被截掉。
+    // 总能量必须是“基底 + 剩余份额 × 边缘能量”，白点随之不低于基底。
+    expect(
+      helperSource,
+      contains('const float kGlassBodyEdrShare = 0.15;'),
+    );
+    expect(
+      helperSource,
+      contains(
+          'float edgeEdrEnergy = (1.0 - kGlassBodyEdrShare) * edgeEnergy;'),
+    );
+    expect(
+      helperSource,
+      contains('float edrEnergy = kGlassBodyEdrShare + edgeEdrEnergy;'),
+    );
   });
 
   test('Windows 有界 Shader 声明 slot 49 但把高光白点限制在 SDR', () {

@@ -2,6 +2,7 @@
 
 ## Poiesis fork
 
+- iOS EDR 区域高光改为“15% headroom 整块基底 + 上下边缘 τ=1.5dp 指数衰减”，取代“宽肩部 + 极窄核心”两级台阶；消除 2～4dp 约 1.08 的亮度平台与 1dp 内的骤降，玻璃主体在 HDR 屏上保持约 1.033。SDR 输出逐值不变。
 - 以 merge commit 升级到官方 `1.7.2`（上游 4d3f4dfe），保留上游完整历史与 Poiesis 定制。
 - 目录随上游迁移：`lib/src/renderer/rendering` → `lib/src/engine/rendering`，最终合成 Shader 改用官方文件名 `liquid_glass_render.frag`；Poiesis 独有的 `glass_backdrop_kernel`、`glass_snapshot`、`glass_highlight_headroom` 仍留在 `lib/src/renderer/`。
 - 上游 1.6.x 新增的 `uBodyMode` / `uTouchPosition` / `uTouchIntensity` 在 Premium 最终合成中顺延到 float slot 50 / 51–52 / 53；轻量 Shader 的 `uBodyMode` 顺延到 slot 38，避开 Poiesis 已占用的解析几何、折射开关、捕获与高光白点 slot。
