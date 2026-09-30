@@ -19,6 +19,7 @@ import '../renderer/liquid_glass_push_back_scope.dart';
 import '../renderer/liquid_glass_self_scale_scope.dart';
 import 'glass_glow.dart';
 import 'internal/transform_tracking_repaint_boundary_mixin.dart';
+import 'liquid_glass_backdrop_share.dart';
 import 'liquid_glass_render_scope.dart';
 import 'liquid_glass_settings.dart';
 import 'multi_shader_builder.dart';
@@ -251,6 +252,14 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
       );
     }
 
+    // [LOCAL PATCH] 共享背景快照：位于 LiquidGlassBackdropShare 之下时，折射
+    // Pass 改挂分组共享的 backdrop id，多块互不重叠的玻璃每帧只翻转一次背景。
+    // 必须在本层 isolate 作用域之上读取，读到的是“本层是否参与共享”。
+    // 自身的 BackdropGroup 始终保留：切换共享与否不改变 widget 树结构，
+    // 子树状态（输入框焦点等）不会因为业务状态切换而重建。
+    final sharedBackdropKey =
+        LiquidGlassSharedBackdropScope.maybeKeyOf(context);
+
     return BackdropGroup(
       child: _ScaleSafeRepaintBoundary(
         // Inflate the RepaintBoundary texture by clipExpansion so that any
@@ -265,7 +274,11 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
               assetKey: ShaderKeys.liquidGlassRender,
               (context, shader, child) => _TouchSpecularBridge(
                 renderShader: shader,
-                backdropKey: BackdropGroup.of(context)?.backdropKey,
+                // 中文说明：共享时模糊 Pass 也读取共享背景（参与者互不重叠，
+                // 语义一致）；不共享时沿用本层 BackdropGroup 的独立 id。
+                backdropKey:
+                    sharedBackdropKey ?? BackdropGroup.of(context)?.backdropKey,
+                sharedBackdropKey: sharedBackdropKey,
                 settings: settings,
                 shadows: widget.shadows,
                 link: _link,
@@ -279,7 +292,11 @@ class _LiquidGlassLayerState extends State<LiquidGlassLayer>
                 pushBackActive: LiquidGlassPushBackScope.of(context),
                 child: child!,
               ),
-              child: widget.child,
+              // 中文说明：嵌套在本层内部的玻璃必须看到本层的渲染结果，
+              // 因此为子树屏蔽共享，内层玻璃回到各自翻转背景的上游语义。
+              child: LiquidGlassSharedBackdropScope.isolate(
+                child: widget.child,
+              ),
             ),
           ),
         ),
@@ -310,6 +327,7 @@ class _TouchSpecularBridge extends StatefulWidget {
     required this.shadows,
     required this.link,
     required this.child,
+    this.sharedBackdropKey,
     this.clipExpansion = EdgeInsets.zero,
     this.preferAnalyticRoundedRectangle = false,
     this.captureImage,
@@ -321,6 +339,9 @@ class _TouchSpecularBridge extends StatefulWidget {
 
   final FragmentShader renderShader;
   final BackdropKey? backdropKey;
+
+  /// 中文说明：[LiquidGlassBackdropShare] 提供的共享 backdrop id，null 表示不共享。
+  final BackdropKey? sharedBackdropKey;
   final LiquidGlassSettings settings;
   final List<BoxShadow> shadows;
   final GeometryRenderLink link;
@@ -393,6 +414,7 @@ class _TouchSpecularBridgeState extends State<_TouchSpecularBridge> {
       key: _rawShapesKey,
       renderShader: widget.renderShader,
       backdropKey: widget.backdropKey,
+      sharedBackdropKey: widget.sharedBackdropKey,
       settings: widget.settings,
       shadows: widget.shadows,
       link: widget.link,
@@ -417,6 +439,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
     required Widget super.child,
     required this.link,
     super.key,
+    this.sharedBackdropKey,
     this.clipExpansion = EdgeInsets.zero,
     this.preferAnalyticRoundedRectangle = false,
     this.captureImage,
@@ -428,6 +451,9 @@ class _RawShapes extends SingleChildRenderObjectWidget {
 
   final FragmentShader renderShader;
   final BackdropKey? backdropKey;
+
+  /// 中文说明：共享 backdrop id，透传给 [RenderLiquidGlassLayer.sharedBackdropKey]。
+  final BackdropKey? sharedBackdropKey;
   final LiquidGlassSettings settings;
   final List<BoxShadow> shadows;
   final GeometryRenderLink link;
@@ -454,6 +480,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       devicePixelRatio: MediaQuery.devicePixelRatioOf(context),
       renderShader: renderShader,
       backdropKey: backdropKey,
+      sharedBackdropKey: sharedBackdropKey,
       settings: settings,
       shadows: shadows,
       link: link,
@@ -478,6 +505,7 @@ class _RawShapes extends SingleChildRenderObjectWidget {
       ..settings = settings
       ..shadows = shadows
       ..backdropKey = backdropKey
+      ..sharedBackdropKey = sharedBackdropKey
       ..clipExpansion = clipExpansion
       ..preferAnalyticRoundedRectangle = preferAnalyticRoundedRectangle
       ..captureImage = captureImage
@@ -504,9 +532,23 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     super.preferAnalyticRoundedRectangle,
     bool selfScaled = false,
     bool pushBackActive = false,
+    BackdropKey? sharedBackdropKey,
   })  : _clipExpansion = clipExpansion,
         _selfScaled = selfScaled,
-        _pushBackActive = pushBackActive;
+        _pushBackActive = pushBackActive,
+        _sharedBackdropKey = sharedBackdropKey;
+
+  /// [LOCAL PATCH] 共享背景快照使用的 backdrop id（见 liquid_glass_backdrop_share.dart）。
+  ///
+  /// 中文说明：非 null 时 Pass 2 的折射 BackdropFilterLayer 挂上该 id，Impeller
+  /// 对同一 id 的多个背景滤镜只翻转一次整屏背景；null 时保持上游行为。
+  BackdropKey? _sharedBackdropKey;
+  BackdropKey? get sharedBackdropKey => _sharedBackdropKey;
+  set sharedBackdropKey(BackdropKey? value) {
+    if (_sharedBackdropKey == value) return;
+    _sharedBackdropKey = value;
+    markNeedsPaint();
+  }
 
   // ── Cached blur filter ──────────────────────────────────────────────────
   // The BackdropFilterLayer's blur filter is rebuilt only when blurSigma
@@ -822,6 +864,11 @@ class RenderLiquidGlassLayer extends LiquidGlassRenderObject
     // FlutterFragCoord() is relative to (see enclosingBackdropPassRect).
     backdropPassClipRectLocal = clipRect;
     final shaderLayer = (_shaderHandle.layer ??= BackdropFilterLayer())
+      // [LOCAL PATCH] 共享背景快照：规则见 resolveShaderPassBackdropKey。
+      ..backdropKey = resolveShaderPassBackdropKey(
+        sharedBackdropKey: _sharedBackdropKey,
+        effectiveBlur: settings.effectiveBlur,
+      )
       ..filter = ImageFilter.shader(renderShader!);
 
     try {

@@ -17,6 +17,9 @@ export 'src/renderer/liquid_glass_renderer.dart'
         GlassGlow,
         debugPaintLiquidGlassGeometry;
 export 'src/engine/liquid_shape.dart'; // all shapes are public
+// [LOCAL PATCH] Poiesis：互不重叠的玻璃共享同一张背景快照（Impeller 性能优化）。
+export 'src/engine/liquid_glass_backdrop_share.dart'
+    show LiquidGlassBackdropShareGroup, LiquidGlassBackdropShare;
 export 'types/interaction_notification.dart'; // public for Smart Silence support
 export 'types/glass_specular_sharpness.dart'; // GlassSpecularSharpness enum
 

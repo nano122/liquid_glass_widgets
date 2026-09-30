@@ -586,6 +586,22 @@ class TabIndicatorState extends State<TabIndicator>
         isWeb: kIsWeb,
       );
 
+  /// 选中/未选中图标层的果冻裁剪方式。
+  ///
+  /// 中文说明：上游使用 [Clip.antiAliasWithSaveLayer]，底栏每帧因此多出两个
+  /// 与底栏等大的离屏 saveLayer（未选中层 + 选中层各一个），在 Impeller GLES
+  /// 上各对应一次独立 render pass 的开启、结束与回贴，底栏出现在所有主页面，
+  /// 这部分开销每帧都要付（见 docs/performance/20260930-gpu/REPORT.md）。
+  ///
+  /// Impeller 的裁剪基于模板缓冲，边缘抗锯齿由 MSAA 统一提供，离屏层内外的
+  /// 裁剪边缘质量相同；被裁剪的只是互不重叠的图标与文字，没有需要先合成
+  /// 再整体裁剪的半透明叠加，所以改为 [Clip.antiAlias] 视觉上等价。
+  /// Skia/Web 仍回到上游 1.7.2 的 saveLayer 裁剪，保持官方视觉基线。
+  @visibleForTesting
+  static Clip get jellyClipBehavior => PoiesisForkPolicy.patchesEnabled
+      ? Clip.antiAlias
+      : Clip.antiAliasWithSaveLayer;
+
   final GlobalKey _iconLayerKey = GlobalKey();
 
   // Cached shape to avoid recreation on every animation frame
@@ -988,7 +1004,7 @@ class TabIndicatorState extends State<TabIndicator>
                               children: [
                                 // Unselected (inverse clipped — visible OUTSIDE pill)
                                 ClipPath(
-                                  clipBehavior: Clip.antiAliasWithSaveLayer,
+                                  clipBehavior: jellyClipBehavior,
                                   clipper: JellyClipper(
                                     itemCount: widget.tabCount,
                                     alignment: alignment
@@ -1008,7 +1024,7 @@ class TabIndicatorState extends State<TabIndicator>
                                 ),
                                 // Selected (forward clipped — visible INSIDE pill)
                                 ClipPath(
-                                  clipBehavior: Clip.antiAliasWithSaveLayer,
+                                  clipBehavior: jellyClipBehavior,
                                   clipper: JellyClipper(
                                     itemCount: widget.tabCount,
                                     alignment: alignment
@@ -1036,7 +1052,7 @@ class TabIndicatorState extends State<TabIndicator>
                             children: [
                               // Unselected (inverse clipped — visible OUTSIDE pill)
                               ClipPath(
-                                clipBehavior: Clip.antiAliasWithSaveLayer,
+                                clipBehavior: jellyClipBehavior,
                                 clipper: JellyClipper(
                                   itemCount: widget.tabCount,
                                   alignment: alignment
@@ -1056,7 +1072,7 @@ class TabIndicatorState extends State<TabIndicator>
                               ),
                               // Selected (forward clipped — visible INSIDE pill)
                               ClipPath(
-                                clipBehavior: Clip.antiAliasWithSaveLayer,
+                                clipBehavior: jellyClipBehavior,
                                 clipper: JellyClipper(
                                   itemCount: widget.tabCount,
                                   alignment: alignment

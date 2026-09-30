@@ -2,6 +2,11 @@
 
 ## Poiesis fork
 
+- 新增 `LiquidGlassBackdropShareGroup` / `LiquidGlassBackdropShare`：让互不重叠的顶层玻璃共用一个 `BackdropKey`，Impeller 每帧只翻转一次整屏背景，不再每块玻璃各翻一次。
+  - 共享只作用于 Pass 2 折射 Shader，且只在没有模糊时生效；有模糊时仍各自翻转，保证能读到本层的模糊结果。
+  - 每个 `LiquidGlassLayer` 都会为自己的子树屏蔽共享，所以嵌套在里面的玻璃始终能看到外层玻璃。
+  - 需要调用方显式声明加入，没有声明的玻璃行为和上游完全一致。
+- `GlassTabBar.bottom` 的果冻裁剪在 Impeller 上从 `Clip.antiAliasWithSaveLayer` 改为 `Clip.antiAlias`，每帧少 2 个底栏大小的离屏层。Impeller 的裁剪基于模板缓冲，边缘由 MSAA 抗锯齿，视觉上没有区别。Skia/Web 保持上游行为。
 - iOS EDR 区域高光改为“15% headroom 整块基底 + 上下边缘 τ=1.5dp 指数衰减”，取代“宽肩部 + 极窄核心”两级台阶；消除 2～4dp 约 1.08 的亮度平台与 1dp 内的骤降，玻璃主体在 HDR 屏上保持约 1.033。SDR 输出逐值不变。
 - 以 merge commit 升级到官方 `1.7.2`（上游 4d3f4dfe），保留上游完整历史与 Poiesis 定制。
 - 目录随上游迁移：`lib/src/renderer/rendering` → `lib/src/engine/rendering`，最终合成 Shader 改用官方文件名 `liquid_glass_render.frag`；Poiesis 独有的 `glass_backdrop_kernel`、`glass_snapshot`、`glass_highlight_headroom` 仍留在 `lib/src/renderer/`。

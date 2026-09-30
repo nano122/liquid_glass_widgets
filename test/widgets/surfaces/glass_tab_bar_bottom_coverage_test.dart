@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:liquid_glass_widgets/liquid_glass_widgets.dart';
+import 'package:liquid_glass_widgets/src/renderer/poiesis_fork_policy.dart';
 import 'package:liquid_glass_widgets/src/widgets/surfaces/tab_bar_bottom_internal.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
@@ -256,6 +257,44 @@ void main() {
       ));
       await tester.pump();
       expect(find.byType(SizedBox), findsWidgets);
+    });
+  });
+
+  // 中文说明：性能回归——底栏图标层曾固定使用 antiAliasWithSaveLayer，
+  // Impeller 下每帧多出两个整栏离屏 pass。Poiesis（Impeller）改为 antiAlias，
+  // Skia/Web 仍保持上游 1.7.2 的 saveLayer 裁剪。
+  group('GlassTabBar.bottom — 果冻裁剪不再额外开 saveLayer', () {
+    Future<List<Clip>> pumpAndCollectJellyClips(WidgetTester tester) async {
+      await tester.pumpWidget(_wrap(
+        SizedBox(
+          height: 100,
+          child: GlassTabBar.bottom(
+            tabs: [_tab('A'), _tab('B'), _tab('C')],
+            selectedIndex: 1,
+            onTabSelected: (_) {},
+          ),
+        ),
+      ));
+      await tester.pump();
+      return tester
+          .widgetList<ClipPath>(find.byType(ClipPath))
+          .where((clip) => clip.clipper is JellyClipper)
+          .map((clip) => clip.clipBehavior)
+          .toList();
+    }
+
+    testWidgets('Impeller（补丁开启）使用 Clip.antiAlias', (tester) async {
+      final clips = await pumpAndCollectJellyClips(tester);
+      expect(clips, hasLength(2));
+      expect(clips, everyElement(Clip.antiAlias));
+    });
+
+    testWidgets('Skia/Web（补丁关闭）保持上游 antiAliasWithSaveLayer', (tester) async {
+      PoiesisForkPolicy.debugPatchesEnabledOverride = false;
+      addTearDown(() => PoiesisForkPolicy.debugPatchesEnabledOverride = true);
+      final clips = await pumpAndCollectJellyClips(tester);
+      expect(clips, hasLength(2));
+      expect(clips, everyElement(Clip.antiAliasWithSaveLayer));
     });
   });
 
